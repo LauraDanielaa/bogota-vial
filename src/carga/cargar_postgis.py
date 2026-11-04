@@ -5,7 +5,8 @@ Carga los CSV a PostGIS, en tablas stg_* (todo como texto, sin limpiar).
 - Descarta las columnas sensibles de SECOP antes de que entren a la base.
 - Normaliza SOLO los nombres de columna (minúsculas, sin tildes, con "_").
   Los valores no se tocan: la limpieza se hace después, en SQL.
-- Es repetible: cada corrida borra y vuelve a crear las tablas stg_*.
+- Es repetible: cada corrida borra y vuelve a crear las tablas stg_*
+  (también las vistas que dependan de ellas; se recrean con los SQL).
 
 Tablas:
     stg_obras             <- data/interim/obras_idu_final.csv
@@ -153,7 +154,7 @@ def preparar_csv(ruta: Path, tabla: str):
 def cargar_csv(cur, tabla: str, ruta: Path):
     columnas, buf, n, descartadas = preparar_csv(ruta, tabla)
 
-    cur.execute(sql.SQL("DROP TABLE IF EXISTS {}").format(sql.Identifier(tabla)))
+    cur.execute(sql.SQL("DROP TABLE IF EXISTS {} CASCADE").format(sql.Identifier(tabla)))
     cur.execute(sql.SQL("CREATE TABLE {} ({})").format(
         sql.Identifier(tabla),
         sql.SQL(", ").join(sql.SQL("{} TEXT").format(sql.Identifier(c)) for c in columnas),
@@ -171,7 +172,7 @@ def cargar_csv(cur, tabla: str, ruta: Path):
 
 def cargar_geojson(cur, ruta: Path):
     datos = json.loads(ruta.read_text(encoding="utf-8"))
-    cur.execute("DROP TABLE IF EXISTS stg_localidades")
+    cur.execute("DROP TABLE IF EXISTS stg_localidades CASCADE")
     cur.execute("""
         CREATE TABLE stg_localidades (
             id SERIAL PRIMARY KEY,
@@ -241,3 +242,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
