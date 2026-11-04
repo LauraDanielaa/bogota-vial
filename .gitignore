@@ -7,5 +7,6 @@ venv/
 
 data/raw/
 data/interim/
+data/geo/ 
 
 .env
