@@ -151,6 +151,12 @@ CREATE INDEX ON clean_obras_metas (objectid);
 -- - Una fila por id_contrato (si hubiera repetidos, queda el más reciente).
 -- - 'contrato' es la llave normalizada para cruzar con clean_obras.contrato.
 -- - Las fechas de SECOP vienen como '2019-10-16T20:36:31.076'; se guarda la fecha.
+-- - Columnas que se dejan fuera por no aportar (siguen en stg_secop_contratos):
+--     valor_pagado, valor_facturado     casi todas en 0 (3 contratos de 913 con dato)
+--     valor_pendiente_pago / _ejecucion igual a valor_contrato en el 99 % de las filas
+--     ciudad, departamento              un solo valor (Bogotá D.C.)
+--     descripcion_del_proceso           igual a objeto_del_contrato en el 83 % de las filas
+--     palabras_encontradas              ayuda de la descarga, no un dato del contrato
 -- ---------------------------------------------------------------------
 DROP TABLE IF EXISTS clean_secop CASCADE;
 
@@ -163,7 +169,6 @@ SELECT DISTINCT ON (id_contrato)
     estado_contrato,
     tipo_de_contrato,
     modalidad_de_contratacion,
-    descripcion_del_proceso,
     objeto_del_contrato,
     proveedor_adjudicado,
     NULLIF(left(fecha_de_firma, 10), '')::date                AS fecha_firma,
@@ -171,17 +176,10 @@ SELECT DISTINCT ON (id_contrato)
     NULLIF(left(fecha_de_fin_del_contrato, 10), '')::date     AS fecha_fin,
     NULLIF(dias_adicionados, '')::integer                     AS dias_adicionados,
     NULLIF(valor_del_contrato, '')::numeric                   AS valor_contrato,
-    NULLIF(valor_facturado, '')::numeric                      AS valor_facturado,
-    NULLIF(valor_pagado, '')::numeric                         AS valor_pagado,
-    NULLIF(valor_pendiente_de_pago, '')::numeric              AS valor_pendiente_pago,
-    NULLIF(valor_pendiente_de_ejecucion, '')::numeric         AS valor_pendiente_ejecucion,
     origen_de_los_recursos,
-    ciudad,
-    departamento,
     urlproceso,
     NULLIF(left(ultima_actualizacion, 10), '')::date          AS ultima_actualizacion,
-    es_obra_vial,
-    palabras_encontradas
+    es_obra_vial
 FROM stg_secop_contratos
 WHERE coalesce(tipo_de_contrato, '') NOT ILIKE 'prestaci%n de servicios%'
 ORDER BY id_contrato, ultima_actualizacion DESC NULLS LAST;

@@ -43,12 +43,16 @@ FROM (
     UNION ALL SELECT '3. Cruce con SECOP', 'contratos distintos con cruce',    (SELECT count(DISTINCT contrato) FROM obras_integradas WHERE en_secop), NULL
 
     -- 4. Datos completados
-    UNION ALL SELECT '4. Datos completados', 'valor tomado de SECOP',          (SELECT count(*) FROM obras_integradas WHERE fuente_valor = 'secop'), NULL
-    UNION ALL SELECT '4. Datos completados', 'fecha de inicio tomada de SECOP', (SELECT count(*) FROM obras_integradas WHERE fuente_fecha_inicio = 'secop'), NULL
-    UNION ALL SELECT '4. Datos completados', 'fecha de fin tomada de SECOP',    (SELECT count(*) FROM obras_integradas WHERE fuente_fecha_fin = 'secop'), NULL
-    UNION ALL SELECT '4. Datos completados', 'contratista tomado de SECOP',     (SELECT count(*) FROM obras_integradas WHERE fuente_contratista = 'secop'), NULL
-    UNION ALL SELECT '4. Datos completados', 'obras que siguen sin valor',      (SELECT count(*) FROM obras_integradas WHERE fuente_valor IS NULL), 'ninguna fuente lo tiene'
-    UNION ALL SELECT '4. Datos completados', 'obras que siguen sin fecha de fin', (SELECT count(*) FROM obras_integradas WHERE fuente_fecha_fin IS NULL), 'ninguna fuente lo tiene'
+    UNION ALL SELECT '4. Datos completados', 'obras con algún dato tomado de SECOP',
+                     (SELECT count(*) FROM obras_integradas i JOIN clean_obras o USING (objectid)
+                      WHERE i.contratista   IS DISTINCT FROM o.contratista
+                         OR i.valor_contrato IS DISTINCT FROM o.valor_contrato
+                         OR i.fecha_inicio  IS DISTINCT FROM o.fecha_inicio
+                         OR i.fecha_fin     IS DISTINCT FROM o.fecha_fin), 'valor, fechas o contratista que el visor no traía'
+    UNION ALL SELECT '4. Datos completados', 'obras que siguen sin valor',         (SELECT count(*) FROM obras_integradas WHERE valor_contrato IS NULL), 'ninguna fuente lo tiene'
+    UNION ALL SELECT '4. Datos completados', 'obras que siguen sin fecha de inicio', (SELECT count(*) FROM obras_integradas WHERE fecha_inicio IS NULL), 'ninguna fuente lo tiene'
+    UNION ALL SELECT '4. Datos completados', 'obras que siguen sin fecha de fin',   (SELECT count(*) FROM obras_integradas WHERE fecha_fin IS NULL), 'ninguna fuente lo tiene'
+    UNION ALL SELECT '4. Datos completados', 'obras que siguen sin contratista',    (SELECT count(*) FROM obras_integradas WHERE contratista IS NULL), 'ninguna fuente lo tiene'
 
     -- 5. Localidad
     UNION ALL SELECT '5. Localidad', 'obras con localidad',     (SELECT count(*) FROM obras_integradas WHERE localidad_codigo IS NOT NULL), NULL
