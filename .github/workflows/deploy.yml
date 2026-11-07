@@ -1,0 +1,87 @@
+# Despliegue automático: en cada push a main se verifica que todo compile y,
+# si la variable del repo DESPLIEGUE_ACTIVO es "true", se actualiza el servidor por SSH.
+#
+# Configuración (GitHub -> Settings -> Secrets and variables -> Actions):
+#   Secrets:   VPS_HOST (IP del servidor), VPS_USER (ubuntu), VPS_SSH_KEY (llave privada)
+#   Variables: DESPLIEGUE_ACTIVO = true   (mientras no exista el servidor, dejarla sin crear)
+
+name: Verificar y desplegar
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch: # botón "Run workflow" para desplegar a mano
+
+concurrency:
+  group: despliegue-${{ github.ref }}
+  cancel-in-progress: false # nunca cortar un despliegue a la mitad
+
+jobs:
+  verificar:
+    name: Verificar que todo compila
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Compilar frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Revisar sintaxis de backend y ETL
+        run: python -m compileall -q backend/app etl
+
+      - name: Validar docker compose de producción
+        env:
+          DOMINIO: ejemplo.com
+          DB_NAME: x
+          DB_USER: x
+          DB_PASSWORD: x
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config --quiet
+
+  desplegar:
+    name: Desplegar en el servidor
+    needs: verificar
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.DESPLIEGUE_ACTIVO == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Actualizar y reiniciar contenedores por SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30m
+          script: |
+            set -e
+            cd /opt/bogota-vial
+            git fetch --prune origin main
+            git reset --hard origin/main
+            COMPOSE="docker compose -f docker-compose.yml -f docker-compose.prod.yml"
+            $COMPOSE up -d --build --remove-orphans
+            docker image prune -f
+
+            # Esperar a que la API responda (máx. ~2 min)
+            for i in $(seq 1 24); do
+              if $COMPOSE exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)" 2>/dev/null; then
+                echo "API en línea"
+                exit 0
+              fi
+              sleep 5
+            done
+            echo "La API no respondió después del despliegue"
+            $COMPOSE logs --tail=80 backend
+            exit 1

@@ -54,6 +54,37 @@ cd frontend && npm install && npm run dev   # http://localhost:5173
 Los scripts de descarga (`etl/src/extraccion/`) se ejecutan desde la raíz del repo, para que
 guarden en `data/raw/`.
 
+## Despliegue en producción
+
+En el servidor (Ubuntu 24.04, p. ej. AWS EC2 `t3.small`) la app corre con Docker detrás de
+[Caddy](https://caddyserver.com), que se encarga del HTTPS. La base y el backend no tienen puertos públicos.
+
+```
+Internet ─HTTPS→ Caddy (80/443) → frontend (nginx, /api) → backend (FastAPI) → db (PostGIS)
+```
+
+| Archivo | Para qué sirve |
+|---|---|
+| `docker-compose.prod.yml` | Se suma al compose normal: cierra puertos y agrega Caddy |
+| `deploy/Caddyfile` | HTTPS automático para `DOMINIO` (y `www.` redirige) |
+| `deploy/setup-servidor.sh` | Prepara el servidor: Docker, swap, llaves, clon del repo, backups |
+| `deploy/backup.sh` | Respaldo diario de la base (`pg_dump`), guarda los últimos 7 |
+| `.github/workflows/deploy.yml` | En cada push a `main`: verifica y, si está activo, despliega por SSH |
+
+Primer despliegue (en el servidor):
+
+```bash
+bash setup-servidor.sh                 # una vez; imprime las llaves que hay que copiar a GitHub
+cd /opt/bogota-vial && nano .env       # ver .env.example (clave fuerte, DOMINIO, MAPBOX_API_KEY)
+# desde tu PC: scp -r data ubuntu@IP:/opt/bogota-vial/
+docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm etl
+```
+
+Despliegue automático: en GitHub → Settings → Secrets and variables → Actions, crear los secrets
+`VPS_HOST`, `VPS_USER` y `VPS_SSH_KEY`, y la variable `DESPLIEGUE_ACTIVO=true`. Desde ahí, cada push a
+`main` se publica solo (pestaña **Actions** para ver el resultado).
+
 ## Endpoints principales
 
 | Método | Ruta                       | Descripción                                      |
@@ -66,3 +97,6 @@ guarden en `data/raw/`.
 | GET    | `/api/localidades`         | Indicadores por localidad                        |
 | GET    | `/api/localidades/geojson` | Polígonos de localidades con indicadores         |
 | GET    | `/api/calidad`             | Reporte de calidad del ETL                       |
+| GET    | `/api/obras/mapa`          | Obras con estado de seguimiento (mapa y listado) |
+| GET    | `/api/obras/indicadores`   | Totales de la página principal (`?localidad=08`) |
+| GET    | `/api/dashboard`           | Indicadores y gráficos Plotly del dashboard      |

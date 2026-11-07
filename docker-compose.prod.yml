@@ -1,0 +1,42 @@
+# Producción: se suma al docker-compose.yml normal.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm etl
+#
+# Diferencias con el entorno local:
+#   * La base, el backend y el frontend NO publican puertos: solo se ven entre contenedores.
+#   * Caddy es la única puerta de entrada (80/443) y saca/renueva el certificado HTTPS solo.
+#   * Requiere DOMINIO en el .env del servidor (p. ej. DOMINIO=bogotavial.me).
+
+services:
+  db:
+    ports: !reset []
+
+  backend:
+    ports: !reset []
+    environment:
+      CORS_ORIGINS: https://${DOMINIO:?Falta DOMINIO en el .env},https://www.${DOMINIO}
+
+  frontend:
+    ports: !reset []
+
+  caddy:
+    image: caddy:2.8-alpine
+    container_name: bogota_vial_caddy
+    restart: unless-stopped
+    environment:
+      DOMINIO: ${DOMINIO:?Falta DOMINIO en el .env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - frontend
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,8 @@
+# Los archivos que se ejecutan en el servidor (Linux) deben tener fin de línea LF,
+# aunque se editen en Windows (core.autocrlf=true los convertiría a CRLF).
+*.sh        text eol=lf
+Caddyfile   text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+Dockerfile  text eol=lf
+*.conf      text eol=lf

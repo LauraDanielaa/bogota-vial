@@ -1,0 +1,21 @@
+# Caddy: HTTPS automático (Let's Encrypt) y entrada única a la app.
+# DOMINIO viene del .env del servidor (docker-compose.prod.yml lo pasa al contenedor).
+
+{$DOMINIO} {
+	encode zstd gzip
+
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# El frontend (nginx) sirve React y reenvía /api al backend
+	reverse_proxy frontend:80
+}
+
+# www.dominio -> dominio
+www.{$DOMINIO} {
+	redir https://{$DOMINIO}{uri} permanent
+}
