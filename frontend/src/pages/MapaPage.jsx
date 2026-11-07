@@ -309,7 +309,7 @@ export default function MapaPage() {
     <div className="page">
       <div className="page-head">
         <div>
-          <h1>Una mirada al avance de Bogotá</h1>
+          <h1>Creado por Laura Daniela Muñoz y Alejandro Nuñez</h1>
           <p className="page-sub">Explora las obras viales, identifica rezagos y compara el territorio.</p>
         </div>
         {errorApi && (
