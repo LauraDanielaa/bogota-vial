@@ -10,13 +10,18 @@ Es repetible: se puede correr las veces que haga falta y da el mismo resultado.
 Si un paso falla, se detiene.
 
 Uso (desde la raíz del repo):
-    python run_etl.py                       # todo
-    python run_etl.py --etapa transformar   # solo la limpieza en SQL
-    python run_etl.py --etapa calidad       # solo el reporte
-    python run_etl.py --etapa cargar        # solo la carga
+    python etl/run_etl.py                       # todo
+    python etl/run_etl.py --etapa transformar   # solo la limpieza en SQL
+    python etl/run_etl.py --etapa calidad       # solo el reporte
+    python etl/run_etl.py --etapa cargar        # solo la carga
+
+Con Docker:
+    docker compose run --rm etl                 # todo
+    docker compose run --rm etl --etapa calidad
 
 La conexión se lee de .env (DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD).
-La descarga de datos (src/extraccion/) no forma parte de este script.
+Los datos se leen de <repo>/data, o de DATA_DIR si está definida.
+La descarga de datos (etl/src/extraccion/) no forma parte de este script.
 """
 
 import argparse

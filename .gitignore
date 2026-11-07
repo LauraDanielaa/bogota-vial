@@ -1,12 +1,24 @@
-pycache/
+# Python
+__pycache__/
 *.pyc
 .venv/
 venv/
 .pytest_cache/
 *.egg-info/
+.ipynb_checkpoints/
 
+# Node
+node_modules/
+dist/
+
+# Datos (se descargan con etl/src/extraccion/)
 data/raw/
 data/interim/
-data/geo/ 
+data/geo/
 
+# Modelos entrenados (pesados)
+ml/models/*
+!ml/models/.gitkeep
+
+# Secretos
 .env

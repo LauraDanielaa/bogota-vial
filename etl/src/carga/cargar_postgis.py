@@ -21,7 +21,7 @@ Conexión (variables de entorno o archivo .env en la raíz del repo):
 
 Uso:
     pip install psycopg2-binary
-    python src/carga/cargar_postgis.py
+    python etl/src/carga/cargar_postgis.py
 """
 
 import csv
@@ -36,7 +36,9 @@ from pathlib import Path
 import psycopg2
 from psycopg2 import sql
 
-RAIZ = Path(__file__).resolve().parents[2]
+RAIZ = Path(__file__).resolve().parents[3]          # raíz del repo (donde está .env)
+# Carpeta de datos: <repo>/data en local, /data dentro de Docker (variable DATA_DIR).
+DATA_DIR = Path(os.environ.get("DATA_DIR", RAIZ / "data"))
 csv.field_size_limit(10**9)
 
 # Columnas que NO deben entrar a la base (personas, cuentas bancarias, documentos).
@@ -66,14 +68,14 @@ SENSIBLES = {
     ],
 }
 
-# (tabla, lista de rutas candidatas: se usa la primera que exista)
+# (tabla, lista de rutas candidatas relativas a DATA_DIR: se usa la primera que exista)
 FUENTES = [
-    ("stg_obras", ["data/interim/obras_idu_final.csv"]),
-    ("stg_secop_contratos", ["data/raw/secop_contratos_idu_completo.csv"]),
-    ("stg_secop_ejecucion", ["data/raw/secop_ejecucion_idu.csv"]),
-    ("stg_cost", ["data/raw/datos_abiertos_bogota.csv"]),
+    ("stg_obras", ["interim/obras_idu_final.csv"]),
+    ("stg_secop_contratos", ["raw/secop_contratos_idu_completo.csv"]),
+    ("stg_secop_ejecucion", ["raw/secop_ejecucion_idu.csv"]),
+    ("stg_cost", ["raw/datos_abiertos_bogota.csv"]),
 ]
-GEOJSON = "data/geo/localidades.geojson"
+GEOJSON = "geo/localidades.geojson"
 
 
 # ---------- utilidades ----------
@@ -118,7 +120,7 @@ def conectar():
 
 def primera_existente(rutas: list[str]) -> Path | None:
     for r in rutas:
-        p = RAIZ / r
+        p = DATA_DIR / r
         if p.exists():
             return p
     return None
@@ -215,14 +217,14 @@ def main():
             continue
         n, en_base, ncols, descartadas = cargar_csv(cur, tabla, ruta)
         ok = "OK" if n == en_base else "NO COINCIDE"
-        print(f"[{tabla}] {ruta.relative_to(RAIZ)}: {en_base} filas, {ncols} columnas ({ok})")
+        print(f"[{tabla}] {ruta.relative_to(DATA_DIR)}: {en_base} filas, {ncols} columnas ({ok})")
         if descartadas:
             print(f"    columnas sensibles descartadas: {len(descartadas)}")
         resumen.append((tabla, en_base))
         if n != en_base:
             errores.append(tabla)
 
-    geo = RAIZ / GEOJSON
+    geo = DATA_DIR / GEOJSON
     if geo.exists():
         n = cargar_geojson(cur, geo)
         print(f"[stg_localidades] {GEOJSON}: {n} localidades")

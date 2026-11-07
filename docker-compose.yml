@@ -1,15 +1,75 @@
+name: bogota-vial
+
+# Uso:
+#   docker compose up -d                 -> base de datos + backend + frontend
+#   docker compose run --rm etl          -> corre el ETL completo (carga los datos de ./data)
+#   docker compose run --rm etl --etapa calidad
+#
+# Las credenciales se leen de .env (ver .env.example).
+
+x-db-env: &db-env
+  DB_HOST: db
+  DB_PORT: 5432
+  DB_NAME: ${DB_NAME}
+  DB_USER: ${DB_USER}
+  DB_PASSWORD: ${DB_PASSWORD}
+
 services:
   db:
     image: postgis/postgis:16-3.4
     container_name: bogota_vial_db
+    restart: unless-stopped
     environment:
       POSTGRES_DB: ${DB_NAME}
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
     ports:
-      - "${DB_PORT}:5432"
+      - "${DB_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  etl:
+    build: ./etl
+    container_name: bogota_vial_etl
+    profiles: ["etl"]           # no arranca con "up"; se ejecuta con "docker compose run --rm etl"
+    environment:
+      <<: *db-env
+      DATA_DIR: /data
+    volumes:
+      - ./data:/data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  backend:
+    build: ./backend
+    container_name: bogota_vial_backend
+    restart: unless-stopped
+    environment:
+      <<: *db-env
+      CORS_ORIGINS: http://localhost:${FRONTEND_PORT:-3000},http://localhost:5173
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        MAPBOX_API_KEY: ${MAPBOX_API_KEY:-}
+    container_name: bogota_vial_frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      - backend
 
 volumes:
   pgdata:

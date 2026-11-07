@@ -4,6 +4,8 @@
 --
 --   v_obras_mapa        1 fila por obra con punto, para dibujar el mapa
 --   v_localidad_stats   1 fila por localidad (20), con indicadores y su polígono
+--                       (contorno = lista [[lon,lat],...] del borde exterior, para el
+--                        gráfico deck.gl Polygon de Superset; geom = geometría PostGIS)
 -- =====================================================================
 
 -- ---------------------------------------------------------------------
@@ -76,7 +78,8 @@ SELECT
     coalesce(o.n_en_ejecucion, 0)             AS n_en_ejecucion,
     coalesce(o.n_suspendidas, 0)              AS n_suspendidas,
     coalesce(o.n_terminadas, 0)               AS n_terminadas,
-    l.geom
+    (ST_AsGeoJSON(l.geom)::json->'coordinates'->0->0)::text  AS contorno,   -- anillo exterior [[lon,lat],...] para Superset (deck.gl Polygon, formato JSON)
+    l.geom                                                   -- para DBeaver y otras herramientas de mapas
 FROM clean_localidades l
 LEFT JOIN obras   o ON o.localidad_codigo = l.codigo
 LEFT JOIN valores v ON v.localidad_codigo = l.codigo;
