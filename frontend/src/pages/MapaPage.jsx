@@ -309,8 +309,8 @@ export default function MapaPage() {
     <div className="page">
       <div className="page-head">
         <div>
-          <h1>Creado por Laura Daniela Muñoz y Alejandro Nuñez</h1>
-          <p className="page-sub">Explora las obras viales, identifica rezagos y compara el territorio.</p>
+          <h1>Panorama de las obras viales en Bogotá</h1>
+          <p className="page-sub">Información para monitorear la ejecución de las obras, detectar retrasos y comparar el avance entre localidades.</p>
         </div>
         {errorApi && (
           <span className="api-error">
