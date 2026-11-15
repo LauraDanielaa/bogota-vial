@@ -41,7 +41,10 @@ function ComoSeCalcula({ metricas }) {
         <p className="riesgo-aviso">El modelo no supera claramente a la línea base: tome el riesgo con cautela.</p>
       )}
       {metricas && !metricas.entrenado && <p className="riesgo-aviso">El modelo aún no se ha entrenado: Sin calcular.</p>}
-      <p className="muted xsmall">Es una estimación estadística, no un dato oficial del IDU.</p>
+      <p className="muted xsmall">
+        Prorrogada es un hecho registrado en SECOP; Alto, Medio y Bajo son estimaciones estadísticas, no datos
+        oficiales del IDU.
+      </p>
     </section>
   );
 }

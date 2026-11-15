@@ -109,7 +109,7 @@ function RiesgoObra({ obra }) {
   const dias = riesgo ? riesgo.dias_adicionados : obra.diasAdicionados;
   const conProbabilidad = ["Alto", "Medio", "Bajo"].includes(nivel);
   const explicacion = {
-    Prorrogada: `Su contrato ya fue prorrogado${dias ? `: tiene ${dias} días adicionados en SECOP` : ""}.`,
+    Prorrogada: `Su contrato ya fue prorrogado${dias ? `: tiene ${dias} días adicionados` : ""}. Es un hecho registrado en SECOP II, no una estimación.`,
     "No aplica": "La obra está finalizada o caducada: el riesgo de atraso no aplica.",
     "Sin dato": "La obra no tiene un contrato cruzado con SECOP II, así que no hay con qué estimar el riesgo.",
     "Sin calcular": "El modelo de riesgo aún no se ha entrenado para esta obra.",
@@ -143,7 +143,7 @@ function RiesgoObra({ obra }) {
           </ul>
         </>
       )}
-      {nivel !== "Sin calcular" && (
+      {conProbabilidad && (
         <p className="riesgo-nota">
           Es una estimación estadística hecha con contratos anteriores del IDU en SECOP II, no un dato oficial del IDU.
         </p>
@@ -622,8 +622,9 @@ export default function ListadoPage({ enlaces, onVincular }) {
           </div>
 
           <div className="tabla-foot">
-            <Icon name="info" size={15} /> Fuente: visor de obras del IDU, cruzado con SECOP II por número de contrato. El
-            riesgo de atraso es una estimación estadística, no un dato oficial del IDU.
+            <Icon name="info" size={15} /> Fuente: visor de obras del IDU, cruzado con SECOP II por número de contrato. En
+            el riesgo de atraso, Prorrogada es un hecho registrado en SECOP; Alto, Medio y Bajo son estimaciones de un
+            modelo estadístico, no datos oficiales del IDU.
           </div>
         </section>
 

@@ -179,7 +179,7 @@ function PanelFiltros({
         <Icon name="info" size={18} />
         <p>
           {verPor === "riesgo"
-            ? "El color del punto indica el riesgo de atraso: la probabilidad estimada de que el contrato sea prorrogado. Es una estimación estadística, no un dato oficial del IDU."
+            ? "El color indica el riesgo de atraso: Prorrogada es un hecho registrado en SECOP; Alto, Medio y Bajo son estimaciones de un modelo estadístico, no datos oficiales del IDU."
             : "El color del punto indica el avance físico (ejecutado), no el estado contractual de la obra."}
         </p>
       </div>

@@ -41,8 +41,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Revisar sintaxis de backend y ETL
-        run: python -m compileall -q backend/app etl
+      - name: Revisar sintaxis de backend, ETL y ML
+        run: python -m compileall -q backend/app etl ml
 
       - name: Validar docker compose de producción
         env:
