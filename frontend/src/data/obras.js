@@ -46,6 +46,10 @@ export function adaptarObra(r) {
     localidadCodigo: r.localidad_codigo,
     localidad: nombreLocalidad(r.localidad_codigo, r.localidad_nombre),
     secopUrl: r.secop_url,
+    // Riesgo de atraso (estimación del modelo de prórroga; "Sin calcular" si no se ha entrenado)
+    riesgo: r.riesgo_nivel || "Sin calcular",
+    probRiesgo: num(r.riesgo_probabilidad),
+    diasAdicionados: num(r.dias_adicionados),
     lat: num(r.lat),
     lon: num(r.lon),
   };

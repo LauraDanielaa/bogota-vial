@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.db import fetch_one, pool
-from app.routers import calidad, dashboard, localidades, obras
+from app.routers import calidad, dashboard, localidades, modelo, obras
 
 
 @asynccontextmanager
@@ -42,3 +42,4 @@ app.include_router(obras.router, prefix="/api")
 app.include_router(localidades.router, prefix="/api")
 app.include_router(calidad.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
+app.include_router(modelo.router, prefix="/api")

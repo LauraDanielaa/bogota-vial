@@ -1,16 +1,33 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Icon from "../components/Icon.jsx";
-import { EstadoBadge, Progress, SearchInput, Select } from "../components/ui.jsx";
+import { EstadoBadge, Progress, RiesgoBadge, SearchInput, Select } from "../components/ui.jsx";
 import { adaptarObra, fecha, SIN_TIPO, textoBrecha } from "../data/obras.js";
 import { api } from "../services/api.js";
-import { colorAvance, ESTADOS_SEGUIMIENTO, normalizar } from "../utils/stats.js";
+import {
+  colorAvance,
+  colorRiesgo,
+  ESTADOS_SEGUIMIENTO,
+  NIVELES_RIESGO,
+  normalizar,
+  ordenRiesgo,
+  RANGOS,
+  rangoDe,
+} from "../utils/stats.js";
 import { formatoPesos, pct } from "../utils/formato.js";
 
 // Obras reales (v_obras_mapa + estado de seguimiento), agrupadas por localidad.
 // "Avance físico" = avance_ejecutado.
 
 const PORTAL_SECOP = "https://www.colombiacompra.gov.co/secop";
-const VACIO = { texto: "", localidad: "", tipo: "", estado: "" };
+const VACIO = { texto: "", localidad: "", tipo: "", estado: "", riesgo: "", avance: "" };
+const SIN_AVANCE = "sin";
+
+// Orden de la tabla. Solo "Localidad" agrupa las filas por localidad.
+const ORDENES = [
+  { value: "localidad", label: "Localidad" },
+  { value: "riesgo", label: "Mayor riesgo" },
+  { value: "avance", label: "Menor avance" },
+];
 const SIN_LOCALIDAD = "Sin localidad";
 
 function paginas(actual, total) {
@@ -23,7 +40,28 @@ function paginas(actual, total) {
 /** "EN EJECUCION" -> "En ejecucion" */
 const oracion = (s = "") => s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 
-function filtrar(obras, f) {
+/** Filtro de avance: "" (todos), "sin" (sin dato) o el índice del rango en RANGOS. */
+function cumpleAvance(o, filtro) {
+  if (!filtro) return true;
+  if (filtro === SIN_AVANCE) return o.avance === null;
+  return o.avance !== null && rangoDe(o.avance) === RANGOS[Number(filtro)];
+}
+
+const porLocalidad = (a, b) =>
+  (a.localidadCodigo ? 0 : 1) - (b.localidadCodigo ? 0 : 1) ||
+  a.localidad.localeCompare(b.localidad) ||
+  a.nombre.localeCompare(b.nombre);
+
+const COMPARAR = {
+  localidad: porLocalidad,
+  // Mayor riesgo: por nivel (Alto, Medio, Bajo, Prorrogada...) y, dentro del nivel, mayor probabilidad
+  riesgo: (a, b) =>
+    ordenRiesgo(a.riesgo) - ordenRiesgo(b.riesgo) || (b.probRiesgo ?? -1) - (a.probRiesgo ?? -1) || porLocalidad(a, b),
+  // Menor avance primero; las obras sin dato de avance van al final
+  avance: (a, b) => (a.avance ?? Infinity) - (b.avance ?? Infinity) || porLocalidad(a, b),
+};
+
+function filtrar(obras, f, orden) {
   const q = normalizar(f.texto.trim());
   return obras
     .filter(
@@ -31,14 +69,11 @@ function filtrar(obras, f) {
         (!q || [o.nombre, o.contrato, o.etapa, o.contratista].some((c) => normalizar(c ?? "").includes(q))) &&
         (!f.localidad || o.localidadCodigo === f.localidad) &&
         (!f.tipo || o.tipo === f.tipo) &&
-        (!f.estado || o.estado === f.estado)
+        (!f.estado || o.estado === f.estado) &&
+        (!f.riesgo || o.riesgo === f.riesgo) &&
+        cumpleAvance(o, f.avance)
     )
-    .sort(
-      (a, b) =>
-        (a.localidadCodigo ? 0 : 1) - (b.localidadCodigo ? 0 : 1) ||
-        a.localidad.localeCompare(b.localidad) ||
-        a.nombre.localeCompare(b.nombre)
-    );
+    .sort(COMPARAR[orden]);
 }
 
 /* ---------------- panel derecho: información completa de la obra ---------------- */
@@ -47,6 +82,72 @@ function Dato({ etiqueta, children, ancho = false }) {
     <div className={`dato ${ancho ? "dato-ancho" : ""}`}>
       <span className="muted xsmall">{etiqueta}</span>
       <strong>{children ?? "sin dato"}</strong>
+    </div>
+  );
+}
+
+/** Riesgo de atraso de la obra (GET /api/obras/{id}/riesgo): probabilidad y sus tres factores. */
+function RiesgoObra({ obra }) {
+  const [riesgo, setRiesgo] = useState(null);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    let vigente = true;
+    setRiesgo(null);
+    setError(null);
+    api
+      .riesgoObra(obra.id)
+      .then((d) => vigente && setRiesgo(d))
+      .catch((e) => vigente && setError(e.message));
+    return () => {
+      vigente = false;
+    };
+  }, [obra.id]);
+
+  // Mientras carga se usa lo que ya trae el listado
+  const nivel = riesgo?.nivel ?? obra.riesgo;
+  const prob = riesgo ? riesgo.probabilidad : obra.probRiesgo;
+  const dias = riesgo ? riesgo.dias_adicionados : obra.diasAdicionados;
+  const conProbabilidad = ["Alto", "Medio", "Bajo"].includes(nivel);
+  const explicacion = {
+    Prorrogada: `Su contrato ya fue prorrogado${dias ? `: tiene ${dias} días adicionados en SECOP` : ""}.`,
+    "No aplica": "La obra está finalizada o caducada: el riesgo de atraso no aplica.",
+    "Sin dato": "La obra no tiene un contrato cruzado con SECOP II, así que no hay con qué estimar el riesgo.",
+    "Sin calcular": "El modelo de riesgo aún no se ha entrenado para esta obra.",
+  }[nivel];
+
+  return (
+    <div className="riesgo-seccion">
+      <div className="riesgo-seccion-head">
+        <span className="muted xsmall">Riesgo de atraso</span>
+        <RiesgoBadge nivel={nivel} dias={dias} />
+      </div>
+      {conProbabilidad && prob !== null && prob !== undefined && (
+        <div>
+          <span className="riesgo-prob">{pct(prob * 100)}</span>{" "}
+          <span className="muted xsmall">de probabilidad estimada de que el contrato sea prorrogado</span>
+          <Progress value={prob * 100} color={colorRiesgo(nivel)} alto={6} />
+        </div>
+      )}
+      {explicacion && <p className="text-2 small">{explicacion}</p>}
+      {error && <p className="muted xsmall">No se pudo cargar el detalle del riesgo ({error}).</p>}
+      {conProbabilidad && riesgo?.factores?.length > 0 && (
+        <>
+          <span className="muted xsmall">Factores que más influyen</span>
+          <ul className="riesgo-factores">
+            {riesgo.factores.map((f) => (
+              <li key={f.variable}>
+                <span className="riesgo-efecto">{f.efecto === "aumenta" ? "▲ Aumenta" : "▼ Reduce"}</span>
+                <span>{f.texto}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+      {nivel !== "Sin calcular" && (
+        <p className="riesgo-nota">
+          Es una estimación estadística hecha con contratos anteriores del IDU en SECOP II, no un dato oficial del IDU.
+        </p>
+      )}
     </div>
   );
 }
@@ -93,6 +194,9 @@ function ConsultaObra({ obra, enlaceManual, onVincular, onCerrar, urlRef }) {
             </p>
           </>
         )}
+
+        <hr />
+        <RiesgoObra obra={obra} />
 
         <hr />
         <span className="muted xsmall">Referencia contractual</span>
@@ -176,6 +280,7 @@ export default function ListadoPage({ enlaces, onVincular }) {
   const [error, setError] = useState(null);
   const [borrador, setBorrador] = useState(VACIO);
   const [filtros, setFiltros] = useState(VACIO);
+  const [orden, setOrden] = useState("localidad");
   const [pagina, setPagina] = useState(1);
   const [porPagina, setPorPagina] = useState(9);
   const [seleccionadaId, setSeleccionadaId] = useState(null);
@@ -214,10 +319,19 @@ export default function ListadoPage({ enlaces, onVincular }) {
         value: e,
         label: `${e} (${conteoEstado[e]})`,
       })),
+      riesgos: NIVELES_RIESGO.filter((n) => todas.some((o) => o.riesgo === n)).map((n) => ({
+        value: n,
+        label: `${n} (${todas.filter((o) => o.riesgo === n).length})`,
+      })),
+      avances: [
+        ...RANGOS.map((r, i) => ({ value: String(i), label: r.etiqueta })),
+        ...(todas.some((o) => o.avance === null) ? [{ value: SIN_AVANCE, label: "Sin dato" }] : []),
+      ],
     };
   }, [todas]);
 
-  const obras = useMemo(() => filtrar(todas, filtros), [todas, filtros]);
+  const obras = useMemo(() => filtrar(todas, filtros, orden), [todas, filtros, orden]);
+  const agrupar = orden === "localidad";
   const conteoLocalidad = useMemo(() => {
     const c = {};
     obras.forEach((o) => (c[o.localidad] = (c[o.localidad] || 0) + 1));
@@ -316,6 +430,24 @@ export default function ListadoPage({ enlaces, onVincular }) {
             options={[{ value: "", label: "Todos los estados" }, ...opciones.estados]}
           />
         </div>
+        <div className="campo">
+          <span className="campo-label">Riesgo de atraso</span>
+          <Select
+            value={borrador.riesgo}
+            onChange={set("riesgo")}
+            aria-label="Riesgo de atraso"
+            options={[{ value: "", label: "Todos los niveles" }, ...opciones.riesgos]}
+          />
+        </div>
+        <div className="campo">
+          <span className="campo-label">Avance físico</span>
+          <Select
+            value={borrador.avance}
+            onChange={set("avance")}
+            aria-label="Rango de avance físico"
+            options={[{ value: "", label: "Todo el rango" }, ...opciones.avances]}
+          />
+        </div>
         <button type="button" className="btn btn-primary btn-tall" onClick={aplicar}>
           <Icon name="sliders" size={16} /> Aplicar filtros
         </button>
@@ -331,7 +463,21 @@ export default function ListadoPage({ enlaces, onVincular }) {
             <h2>
               Obras por localidad <span className="pill pill-gold">{obras.length} obras</span>
             </h2>
-            <span className="muted xsmall">Agrupado por localidad · {conFiltros ? "Con filtros" : "Sin filtros"}</span>
+            <div className="tabla-head-derecha">
+              <Select
+                inlineLabel="Ordenar por"
+                value={orden}
+                onChange={(v) => {
+                  setOrden(v);
+                  setPagina(1);
+                }}
+                aria-label="Ordenar por"
+                options={ORDENES}
+              />
+              <span className="muted xsmall">
+                {agrupar ? "Agrupado por localidad" : "Sin agrupar"} · {conFiltros ? "Con filtros" : "Sin filtros"}
+              </span>
+            </div>
           </div>
 
           <div className="tabla-scroll">
@@ -342,19 +488,20 @@ export default function ListadoPage({ enlaces, onVincular }) {
                   <th>Tipo de contrato</th>
                   <th>Avance físico</th>
                   <th>Estado</th>
+                  <th>Riesgo de atraso</th>
                   <th>Contrato SECOP</th>
                 </tr>
               </thead>
               <tbody>
                 {visibles.length === 0 && (
                   <tr>
-                    <td colSpan={5} className="tabla-vacia">
+                    <td colSpan={6} className="tabla-vacia">
                       {cargando ? "Cargando obras…" : "No hay obras con esos filtros."}
                     </td>
                   </tr>
                 )}
                 {visibles.map((o) => {
-                  const nuevaLocalidad = o.localidad !== ultimaLocalidad;
+                  const nuevaLocalidad = agrupar && o.localidad !== ultimaLocalidad;
                   ultimaLocalidad = o.localidad;
                   const url = o.secopUrl || enlaces[o.id];
                   const n = conteoLocalidad[o.localidad];
@@ -362,7 +509,7 @@ export default function ListadoPage({ enlaces, onVincular }) {
                     <Fragment key={o.id}>
                       {nuevaLocalidad && (
                         <tr className="fila-grupo">
-                          <td colSpan={5}>
+                          <td colSpan={6}>
                             <Icon name="pin" size={15} />
                             <strong>{o.localidad}</strong>
                             <span>
@@ -379,7 +526,7 @@ export default function ListadoPage({ enlaces, onVincular }) {
                         <td>
                           <div className="obra-nombre">{o.nombre}</div>
                           <div className="obra-ref">
-                            {[o.etapa, o.contrato].filter(Boolean).join(" · ")}
+                            {[agrupar ? null : o.localidad, o.etapa, o.contrato].filter(Boolean).join(" · ")}
                           </div>
                         </td>
                         <td className="text-2">{o.tipo}</td>
@@ -395,6 +542,9 @@ export default function ListadoPage({ enlaces, onVincular }) {
                         </td>
                         <td>
                           <EstadoBadge estado={o.estado} />
+                        </td>
+                        <td>
+                          <RiesgoBadge nivel={o.riesgo} probabilidad={o.probRiesgo} dias={o.diasAdicionados} />
                         </td>
                         <td onClick={(e) => e.stopPropagation()}>
                           {url ? (
@@ -472,7 +622,8 @@ export default function ListadoPage({ enlaces, onVincular }) {
           </div>
 
           <div className="tabla-foot">
-            <Icon name="info" size={15} /> Fuente: visor de obras del IDU, cruzado con SECOP II por número de contrato.
+            <Icon name="info" size={15} /> Fuente: visor de obras del IDU, cruzado con SECOP II por número de contrato. El
+            riesgo de atraso es una estimación estadística, no un dato oficial del IDU.
           </div>
         </section>
 
@@ -495,8 +646,8 @@ export default function ListadoPage({ enlaces, onVincular }) {
               <div className="consulta-body">
                 <Icon name="list" size={28} className="accent" />
                 <p className="text-2 small">
-                  Selecciona una obra del listado para ver su información completa: avance, contrato, contratista,
-                  fechas y enlace a SECOP.
+                  Selecciona una obra del listado para ver su información completa: avance, riesgo de atraso,
+                  contrato, contratista, fechas y enlace a SECOP.
                 </p>
               </div>
             </section>

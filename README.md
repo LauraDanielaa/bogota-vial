@@ -15,7 +15,7 @@ bogota-vial/
 │   └── run_etl.py           ejecuta cargar -> transformar -> calidad
 ├── backend/             API REST (FastAPI) que lee las vistas de PostGIS
 ├── frontend/            aplicación web (React + Vite + Leaflet)
-├── ml/                  modelos de machine learning (próximamente)
+├── ml/                  modelos de machine learning (un subdirectorio por modelo)
 ├── data/                datos crudos e intermedios (no se suben a git)
 └── docker-compose.yml
 ```
@@ -26,6 +26,7 @@ bogota-vial/
 cp .env.example .env          # y editar la clave
 docker compose up -d --build  # base de datos + backend + frontend
 docker compose run --rm etl   # carga los datos de ./data en la base
+docker compose run --rm ml riesgo_prorroga   # entrena el modelo de riesgo de atraso (después del ETL)
 ```
 
 - Frontend: http://localhost:3000
@@ -33,6 +34,25 @@ docker compose run --rm etl   # carga los datos de ./data en la base
 - PostGIS: `localhost:5432`
 
 Para correr solo una etapa del ETL: `docker compose run --rm etl --etapa calidad`.
+
+## Modelo de riesgo de atraso
+
+El riesgo de atraso de cada obra es la probabilidad, estimada con un modelo de machine learning, de que su
+contrato en SECOP II sea prorrogado (tenga días adicionados). Detalle en
+[ml/riesgo_prorroga/README.md](ml/riesgo_prorroga/README.md).
+
+Para entrenarlo (o reentrenarlo cuando lleguen datos nuevos):
+
+```bash
+docker compose run --rm etl                    # 1. el ETL crea v_ml_contratos y las tablas ml_*
+docker compose run --rm ml riesgo_prorroga     # 2. entrena, imprime las métricas y guarda los resultados
+```
+
+- El modelo queda en `ml/models/riesgo_prorroga/` y las métricas y predicciones en la base
+  (`ml_prorroga_metricas`, `ml_prorroga_contrato`, `ml_riesgo_obra`). El backend solo lee esas tablas.
+- Volver a correr el ETL **no** borra las predicciones. Si cambian los datos, hay que reentrenar para
+  que el riesgo se recalcule.
+- Mientras el modelo no se haya entrenado, la web muestra el riesgo como "Sin calcular".
 
 ## Desarrollo local (sin Docker para la app)
 
@@ -46,6 +66,10 @@ python etl/run_etl.py
 # Backend
 pip install -r backend/requirements.txt
 cd backend && uvicorn app.main:app --reload
+
+# Modelo de riesgo (Python 3.12, después del ETL)
+pip install -r ml/requirements.txt
+python ml/run_ml.py riesgo_prorroga
 
 # Frontend (en otra terminal)
 cd frontend && npm install && npm run dev   # http://localhost:5173
@@ -97,6 +121,8 @@ Despliegue automático: en GitHub → Settings → Secrets and variables → Act
 | GET    | `/api/localidades`         | Indicadores por localidad                        |
 | GET    | `/api/localidades/geojson` | Polígonos de localidades con indicadores         |
 | GET    | `/api/calidad`             | Reporte de calidad del ETL                       |
-| GET    | `/api/obras/mapa`          | Obras con estado de seguimiento (mapa y listado) |
+| GET    | `/api/obras/mapa`          | Obras con estado de seguimiento y riesgo de atraso (mapa y listado) |
+| GET    | `/api/obras/{objectid}/riesgo` | Riesgo de atraso de una obra, con sus tres factores |
+| GET    | `/api/modelo/metricas`     | Métricas del modelo de riesgo activo             |
 | GET    | `/api/obras/indicadores`   | Totales de la página principal (`?localidad=08`) |
-| GET    | `/api/dashboard`           | Indicadores y gráficos Plotly del dashboard      |
+| GET    | `/api/dashboard`           | Indicadores y gráficos Plotly del dashboard (incluye riesgo por localidad) |

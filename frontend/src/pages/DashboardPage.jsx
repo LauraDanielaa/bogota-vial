@@ -4,18 +4,61 @@ import KpiRow from "../components/KpiRow.jsx";
 import PlotlyChart from "../components/PlotlyChart.jsx";
 import { Insight, Select } from "../components/ui.jsx";
 import { api } from "../services/api.js";
-import { pct } from "../utils/formato.js";
+import { numero, pct } from "../utils/formato.js";
+import { colorRiesgo } from "../utils/stats.js";
 
 // Los gráficos se arman en Python (backend/app/routers/dashboard.py, con Plotly)
 // a partir de los datos reales; aquí solo se dibujan.
 
 const FILTROS_INICIALES = { localidad: "", tipo: "", periodo: "" };
+const NIVELES_TARJETA = ["Alto", "Medio", "Bajo", "Prorrogada"];
+
+/** Recuadro "¿Cómo se calcula el riesgo?" (usa /api/modelo/metricas). */
+function ComoSeCalcula({ metricas }) {
+  const u = metricas?.umbrales ?? { medio: 0.3, alto: 0.6 };
+  const elegido = metricas?.modelos?.find((m) => m.seleccionado);
+  return (
+    <section className="card riesgo-explica">
+      <h3>¿Cómo se calcula el riesgo?</h3>
+      <p>
+        Un modelo estadístico estima la probabilidad de que el contrato de la obra sea prorrogado, a partir de{" "}
+        {metricas?.n_entrenamiento ? `${numero(metricas.n_entrenamiento)} contratos` : "contratos"} anteriores del IDU
+        en SECOP II. Solo usa lo que se sabe al firmar: tipo, modalidad, valor, duración pactada, categoría, fecha de
+        firma e historial del contratista.
+      </p>
+      <p>
+        Riesgo <strong>alto</strong> desde {pct(u.alto * 100)}, <strong>medio</strong> desde {pct(u.medio * 100)} y{" "}
+        <strong>bajo</strong> por debajo. Las obras finalizadas o caducadas no aplican y las que ya tienen días
+        adicionados aparecen como <strong>prorrogadas</strong>.
+      </p>
+      {metricas?.entrenado && elegido && (
+        <p className="muted xsmall">
+          Modelo: {metricas.modelo_nombre}. PR-AUC {numero(elegido.cv_pr_auc, 2)} frente a{" "}
+          {numero(metricas.linea_base_pr_auc, 2)} de la línea base (validación cruzada).
+        </p>
+      )}
+      {metricas?.entrenado && metricas.supera_linea_base === false && (
+        <p className="riesgo-aviso">El modelo no supera claramente a la línea base: tome el riesgo con cautela.</p>
+      )}
+      {metricas && !metricas.entrenado && <p className="riesgo-aviso">El modelo aún no se ha entrenado: Sin calcular.</p>}
+      <p className="muted xsmall">Es una estimación estadística, no un dato oficial del IDU.</p>
+    </section>
+  );
+}
 
 export default function DashboardPage() {
   const [filtros, setFiltros] = useState(FILTROS_INICIALES);
   const [datos, setDatos] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState(null);
+  const [metricas, setMetricas] = useState(null);
+
+  useEffect(() => {
+    api
+      .modeloMetricas()
+      .then(setMetricas)
+      .catch(() => setMetricas(null));
+  }, []);
 
   useEffect(() => {
     let vigente = true;
@@ -177,6 +220,47 @@ export default function DashboardPage() {
           {datos && <PlotlyChart figura={datos.etapas.figura} vacio={datos.etapas.insight} />}
           {datos?.etapas.figura && <Insight icon="trendUp">{datos.etapas.insight}</Insight>}
         </section>
+      </div>
+
+      <div className="dash-row dash-row-riesgo">
+        <section className="card chart-card">
+          <div className="chart-card-head">
+            <div>
+              <h2>¿Dónde está el riesgo de atraso?</h2>
+              <p className="chart-sub">
+                Obras por nivel de riesgo de prórroga en cada localidad (obras finalizadas, caducadas o sin contrato
+                en SECOP no se incluyen)
+              </p>
+            </div>
+          </div>
+          {datos && <PlotlyChart figura={datos.riesgo_localidad.figura} vacio={datos.riesgo_localidad.insight} />}
+          {datos?.riesgo_localidad.figura && <Insight>{datos.riesgo_localidad.insight}</Insight>}
+        </section>
+
+        <div className="riesgo-side">
+          <section className="card riesgo-kpi">
+            <span className="kpi-titulo">Obras en riesgo alto</span>
+            <span className="riesgo-kpi-valor">
+              {!datos ? "—" : datos.riesgo_localidad.modelo.entrenado ? datos.riesgo_localidad.n_alto : "Sin calcular"}
+            </span>
+            <span className="kpi-sub">
+              {datos?.riesgo_localidad.modelo.entrenado
+                ? `De ${r?.total ?? "—"} obras con estos filtros`
+                : "El modelo de riesgo aún no se ha entrenado"}
+            </span>
+            {datos?.riesgo_localidad.modelo.entrenado && (
+              <div className="riesgo-niveles">
+                {NIVELES_TARJETA.filter((n) => datos.riesgo_localidad.por_nivel[n]).map((n) => (
+                  <span key={n} className="badge badge-riesgo">
+                    <span className="riesgo-dot" style={{ background: colorRiesgo(n) }} />
+                    {n}: {datos.riesgo_localidad.por_nivel[n]}
+                  </span>
+                ))}
+              </div>
+            )}
+          </section>
+          <ComoSeCalcula metricas={metricas} />
+        </div>
       </div>
     </div>
   );

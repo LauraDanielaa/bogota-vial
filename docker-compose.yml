@@ -4,6 +4,7 @@ name: bogota-vial
 #   docker compose up -d                 -> base de datos + backend + frontend
 #   docker compose run --rm etl          -> corre el ETL completo (carga los datos de ./data)
 #   docker compose run --rm etl --etapa calidad
+#   docker compose run --rm ml riesgo_prorroga   -> entrena el modelo (después del ETL)
 #
 # Las credenciales se leen de .env (ver .env.example).
 
@@ -42,6 +43,18 @@ services:
       DATA_DIR: /data
     volumes:
       - ./data:/data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
+  ml:
+    build: ./ml
+    container_name: bogota_vial_ml
+    profiles: ["ml"]            # se ejecuta después del ETL con "docker compose run --rm ml riesgo_prorroga"
+    environment:
+      <<: *db-env
+    volumes:
+      - ./ml/models:/app/models # los modelos entrenados quedan en ml/models del repo
     depends_on:
       db:
         condition: service_healthy

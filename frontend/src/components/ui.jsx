@@ -1,6 +1,6 @@
 // Piezas pequeñas de interfaz reutilizadas en las tres vistas.
 import Icon from "./Icon.jsx";
-import { rangoDe } from "../utils/stats.js";
+import { colorRiesgo, rangoDe, textoRiesgo } from "../utils/stats.js";
 
 /** Select nativo con flecha propia. `inlineLabel` pone la etiqueta dentro de la caja. */
 export function Select({ value, onChange, options, inlineLabel, className = "", ...rest }) {
@@ -48,6 +48,16 @@ export function EstadoBadge({ estado, children, dot = true }) {
     <span className={`badge ${CLASE_ESTADO[estado] ?? ""}`}>
       {dot && <span className="badge-dot" />}
       {children ?? estado}
+    </span>
+  );
+}
+
+/** Etiqueta del riesgo de atraso: siempre con el nombre del nivel, no solo el color. */
+export function RiesgoBadge({ nivel, probabilidad, dias }) {
+  return (
+    <span className="badge badge-riesgo">
+      <span className="riesgo-dot" style={{ background: colorRiesgo(nivel) }} />
+      {textoRiesgo(nivel, probabilidad, dias)}
     </span>
   );
 }

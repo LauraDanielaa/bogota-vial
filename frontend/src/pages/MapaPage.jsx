@@ -5,7 +5,15 @@ import MapaObras from "../components/MapaObras.jsx";
 import { EstadoBadge, Progress, SearchInput, Select } from "../components/ui.jsx";
 import { adaptarObra, fecha, nombreLocalidad, SIN_TIPO, textoBrecha } from "../data/obras.js";
 import { api } from "../services/api.js";
-import { COLOR_SIN_DATO, ESTADOS_SEGUIMIENTO, normalizar, RANGOS, rangoDe } from "../utils/stats.js";
+import {
+  COLOR_SIN_DATO,
+  colorRiesgo,
+  ESTADOS_SEGUIMIENTO,
+  NIVELES_RIESGO,
+  normalizar,
+  RANGOS,
+  rangoDe,
+} from "../utils/stats.js";
 import { formatoPesos, pct } from "../utils/formato.js";
 
 // "Avance físico" = columna avance_ejecutado de la base de datos.
@@ -18,6 +26,7 @@ const FILTROS_INICIALES = {
   min: 0,
   max: 100,
   estados: [...ESTADOS_SEGUIMIENTO],
+  riesgos: [...NIVELES_RIESGO],
 };
 
 /* ---------------- datos ---------------- */
@@ -31,6 +40,7 @@ function filtrar(obras, f) {
     if (f.tipo && o.tipo !== f.tipo) return false;
     // Las obras sin dato de avance solo se muestran con el rango completo (0–100 %)
     if (o.avance === null ? !rangoCompleto : o.avance < f.min || o.avance > f.max) return false;
+    if (!f.riesgos.includes(o.riesgo)) return false;
     return f.estados.includes(o.estado);
   });
 }
@@ -55,10 +65,21 @@ function avancePorLocalidad(obras) {
 }
 
 /* ---------------- panel de filtros (columna izquierda) ---------------- */
-function PanelFiltros({ filtros, setFiltros, opcionesLocalidad, tipos, conteoEstado, total, filtradas }) {
+function PanelFiltros({
+  filtros,
+  setFiltros,
+  opcionesLocalidad,
+  tipos,
+  conteoEstado,
+  conteoRiesgo,
+  verPor,
+  total,
+  filtradas,
+}) {
   const set = (k) => (v) => setFiltros({ ...filtros, [k]: v });
-  const toggleEstado = (e) =>
-    set("estados")(filtros.estados.includes(e) ? filtros.estados.filter((x) => x !== e) : [...filtros.estados, e]);
+  const alternar = (k, valor) =>
+    set(k)(filtros[k].includes(valor) ? filtros[k].filter((x) => x !== valor) : [...filtros[k], valor]);
+  const toggleEstado = (e) => alternar("estados", e);
 
   return (
     <aside className="card filtros-panel">
@@ -142,9 +163,25 @@ function PanelFiltros({ filtros, setFiltros, opcionesLocalidad, tipos, conteoEst
         ))}
       </div>
 
+      <div className="campo">
+        <span className="campo-label">Riesgo de atraso</span>
+        {NIVELES_RIESGO.filter((n) => conteoRiesgo[n]).map((n) => (
+          <label key={n} className="check">
+            <input type="checkbox" checked={filtros.riesgos.includes(n)} onChange={() => alternar("riesgos", n)} />
+            <span className="riesgo-dot" style={{ background: colorRiesgo(n) }} />
+            <span>{n}</span>
+            <span className="check-count">{conteoRiesgo[n]}</span>
+          </label>
+        ))}
+      </div>
+
       <div className="nota-box">
         <Icon name="info" size={18} />
-        <p>El color del punto indica el avance físico (ejecutado), no el estado contractual de la obra.</p>
+        <p>
+          {verPor === "riesgo"
+            ? "El color del punto indica el riesgo de atraso: la probabilidad estimada de que el contrato sea prorrogado. Es una estimación estadística, no un dato oficial del IDU."
+            : "El color del punto indica el avance físico (ejecutado), no el estado contractual de la obra."}
+        </p>
       </div>
 
       <p className="filtros-foot">
@@ -230,6 +267,7 @@ function ObraSeleccionada({ obra, onCerrar }) {
 export default function MapaPage() {
   const [filtros, setFiltros] = useState(FILTROS_INICIALES);
   const [seleccionadaId, setSeleccionadaId] = useState(null);
+  const [verPor, setVerPor] = useState("avance"); // color de los puntos: "avance" | "riesgo"
   const mapaRef = useRef(null);
 
   // Obras reales (v_obras_mapa) y polígonos de las localidades
@@ -276,6 +314,11 @@ export default function MapaPage() {
     todas.forEach((o) => (c[o.estado] = (c[o.estado] || 0) + 1));
     return c;
   }, [todas]);
+  const conteoRiesgo = useMemo(() => {
+    const c = {};
+    todas.forEach((o) => (c[o.riesgo] = (c[o.riesgo] || 0) + 1));
+    return c;
+  }, [todas]);
   const opcionesLocalidad = useMemo(
     () =>
       (localidadesGeo?.features ?? [])
@@ -293,6 +336,9 @@ export default function MapaPage() {
 
   const conteoRangos = RANGOS.map((r) => obras.filter((o) => o.avance !== null && rangoDe(o.avance) === r).length);
   const sinAvance = obras.filter((o) => o.avance === null).length;
+  const riesgoVisibles = NIVELES_RIESGO.map((n) => ({ nivel: n, n: obras.filter((o) => o.riesgo === n).length })).filter(
+    (r) => r.n > 0
+  );
   // Si la obra seleccionada queda fuera de los filtros, la tarjeta se oculta
   const seleccionada = obras.find((o) => o.id === seleccionadaId) ?? null;
 
@@ -328,6 +374,8 @@ export default function MapaPage() {
           opcionesLocalidad={opcionesLocalidad}
           tipos={tipos}
           conteoEstado={conteoEstado}
+          conteoRiesgo={conteoRiesgo}
+          verPor={verPor}
           total={todas.length}
           filtradas={obras.length}
         />
@@ -335,6 +383,25 @@ export default function MapaPage() {
         {/* ---------- mapa ---------- */}
         <section className="card map-card" ref={mapaRef}>
           <div className="map-card-head">
+            <div className="ver-por" role="group" aria-label="Ver puntos por">
+              <span>Ver puntos por:</span>
+              <div className="mini-tabs">
+                {[
+                  ["avance", "Avance físico"],
+                  ["riesgo", "Riesgo de atraso"],
+                ].map(([valor, texto]) => (
+                  <button
+                    key={valor}
+                    type="button"
+                    className={`mini-tab ${verPor === valor ? "is-active" : ""}`}
+                    aria-pressed={verPor === valor}
+                    onClick={() => setVerPor(valor)}
+                  >
+                    {texto}
+                  </button>
+                ))}
+              </div>
+            </div>
             <div className="map-card-meta">
               <span className="dot dot-primary" />
               {obras.length} {obras.length === 1 ? "obra" : "obras"} en el mapa
@@ -350,8 +417,31 @@ export default function MapaPage() {
             onSeleccionar={setSeleccionadaId}
             contorno={contorno}
             etiquetaZona={contorno ? `${nombreLocalidad(filtros.localidad)} · Localidad` : "Bogotá, D. C. · Área urbana"}
+            verPor={verPor}
           />
 
+          {verPor === "riesgo" ? (
+            <div className="map-legend">
+              <div className="map-legend-title">
+                <strong>Riesgo de atraso</strong>
+                <span>Más oscuro: mayor riesgo</span>
+              </div>
+              <div className="map-legend-bins">
+                {riesgoVisibles.length === 0 && <span className="map-legend-note">No hay obras con estos filtros.</span>}
+                {riesgoVisibles.map((r) => (
+                  <div key={r.nivel} className="legend-bin">
+                    <span className="legend-dot riesgo-dot" style={{ background: colorRiesgo(r.nivel) }} />
+                    <div>
+                      <strong>{r.nivel}</strong>
+                      <span>
+                        {r.n} {r.n === 1 ? "obra" : "obras"}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
           <div className="map-legend">
             <div className="map-legend-title">
               <strong>Avance físico</strong>
@@ -378,6 +468,7 @@ export default function MapaPage() {
               )}
             </div>
           </div>
+          )}
         </section>
 
         {/* ---------- columna derecha ---------- */}

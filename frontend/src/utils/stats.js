@@ -19,6 +19,40 @@ export function colorAvance(avance) {
   return avance === null || avance === undefined ? COLOR_SIN_DATO : rangoDe(avance).color;
 }
 
+// Riesgo de atraso (modelo de prórroga, ml/riesgo_prorroga). Niveles en orden de prioridad.
+// Paleta de un solo tono que se distingue por luminosidad (Alto oscuro -> Bajo claro), sin rojo
+// frente a verde; "Prorrogada" usa otro tono y los niveles sin probabilidad van en grises.
+// El nombre del nivel se muestra siempre junto al color (leyenda, tooltip, etiquetas).
+export const NIVELES_RIESGO = ["Alto", "Medio", "Bajo", "Prorrogada", "No aplica", "Sin dato", "Sin calcular"];
+
+export const COLOR_RIESGO = {
+  Alto: "#262a66",
+  Medio: "#5b6cc0",
+  Bajo: "#94a6f7",
+  Prorrogada: "#c98b2e",
+  "No aplica": "#d9d1c6",
+  "Sin dato": "#9a8f85",
+  "Sin calcular": "#bdb3a8",
+};
+
+export const colorRiesgo = (nivel) => COLOR_RIESGO[nivel] ?? COLOR_RIESGO["Sin calcular"];
+
+/** Posición del nivel para ordenar de mayor a menor riesgo. */
+export const ordenRiesgo = (nivel) => {
+  const i = NIVELES_RIESGO.indexOf(nivel);
+  return i === -1 ? NIVELES_RIESGO.length : i;
+};
+
+/** "Riesgo alto (64 %)" · "Prorrogada (+120 días)" · "Sin calcular" */
+export function textoRiesgo(nivel, probabilidad, dias) {
+  if (["Alto", "Medio", "Bajo"].includes(nivel)) {
+    const p = probabilidad === null || probabilidad === undefined ? "" : ` (${Math.round(probabilidad * 100)} %)`;
+    return `Riesgo ${nivel.toLowerCase()}${p}`;
+  }
+  if (nivel === "Prorrogada" && dias) return `Prorrogada (+${dias} días)`;
+  return nivel ?? "Sin calcular";
+}
+
 // Estados de seguimiento que calcula la base de datos (función clasificar_obra)
 export const ESTADOS_SEGUIMIENTO = ["En ejecución", "Retrasada", "Suspendida", "Finalizada", "Caducada", "Sin dato"];
 

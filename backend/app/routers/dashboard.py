@@ -14,7 +14,8 @@ from statistics import mean
 import plotly.graph_objects as go
 from fastapi import APIRouter, Query
 
-from app.db import fetch_all
+from app.db import fetch_all, fetch_one
+from app.routers.modelo import NOMBRE_MODELO, SQL_VERSION_ACTIVA, UMBRALES
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -57,6 +58,17 @@ NOMBRE_LOCALIDAD = {
     "18": "Rafael Uribe Uribe", "19": "Ciudad Bolívar", "20": "Sumapaz",
 }
 SIN_DATO = "Sin dato"
+
+# Riesgo de atraso (modelo de prórroga). Paleta de un solo tono que se distingue por
+# luminosidad (Alto oscuro -> Bajo claro); Prorrogada usa otro tono. Mismos colores del frontend.
+NIVELES_RIESGO = ["Alto", "Medio", "Bajo", "Prorrogada"]
+COLOR_RIESGO = {
+    "Alto": "#262a66",
+    "Medio": "#5b6cc0",
+    "Bajo": "#94a6f7",
+    "Prorrogada": "#c98b2e",
+}
+SIN_CALCULAR = "Sin calcular"
 
 
 def _num(v):
@@ -105,13 +117,15 @@ def _layout(fig: go.Figure, **extra):
 # ---------------------------------------------------------------------------
 def _cargar_obras():
     filas = fetch_all(
-        """
-        SELECT objectid, nombre, etapa, contrato_tipo, estado_seguimiento,
+        f"""
+        SELECT s.objectid, nombre, etapa, contrato_tipo, estado_seguimiento,
                avance_ejecutado, avance_programado,
                localidad_codigo, localidad_nombre,
-               extract(year FROM fecha_inicio)::int AS anio_inicio,
-               fecha_actualizacion
-        FROM v_obras_seguimiento
+               extract(year FROM s.fecha_inicio)::int AS anio_inicio,
+               fecha_actualizacion,
+               coalesce(r.nivel, 'Sin calcular') AS riesgo_nivel
+        FROM v_obras_seguimiento s
+        LEFT JOIN ml_riesgo_obra r ON r.objectid = s.objectid AND r.version = {SQL_VERSION_ACTIVA}
         """
     )
     obras = []
@@ -129,6 +143,7 @@ def _cargar_obras():
                 "localidad": NOMBRE_LOCALIDAD.get(cod) or (f["localidad_nombre"] or "").title() or None,
                 "anio": f["anio_inicio"],
                 "actualizacion": f["fecha_actualizacion"],
+                "riesgo": f["riesgo_nivel"],
             }
         )
     return obras
@@ -163,6 +178,7 @@ def _resumen(obras):
         "suspendidas": c["Suspendida"],
         "atencion": c["Retrasada"] + c["Suspendida"],
         "porEstado": {e: c[e] for e in ESTADOS},
+        "riesgoAlto": sum(o["riesgo"] == "Alto" for o in obras),
     }
 
 
@@ -361,6 +377,67 @@ def _grafico_etapas(obras):
     return _a_json(fig), insight
 
 
+def _modelo_activo():
+    """Modelo de riesgo seleccionado en la versión activa (None si no se ha entrenado)."""
+    return fetch_one(
+        f"""
+        SELECT version, modelo, supera_linea_base, entrenado_en
+        FROM ml_prorroga_metricas
+        WHERE version = {SQL_VERSION_ACTIVA} AND seleccionado
+        """
+    )
+
+
+def _grafico_riesgo_localidad(obras, modelo):
+    """Barras horizontales apiladas: obras por nivel de riesgo de atraso en cada localidad."""
+    if modelo is None:
+        return None, "El modelo de riesgo aún no se ha entrenado: el riesgo de las obras está sin calcular."
+    grupos = defaultdict(Counter)
+    for o in obras:
+        if o["localidad_codigo"] and o["riesgo"] in NIVELES_RIESGO:
+            grupos[o["localidad"]][o["riesgo"]] += 1
+    if not grupos:
+        return None, "No hay obras con riesgo calculado para estos filtros."
+    # Plotly dibuja de abajo hacia arriba: la localidad con más riesgo alto queda arriba
+    locs = sorted(grupos, key=lambda l: (grupos[l]["Alto"], grupos[l]["Medio"], sum(grupos[l].values())))
+
+    fig = go.Figure()
+    for nivel in NIVELES_RIESGO:
+        valores = [grupos[l][nivel] for l in locs]
+        if not any(valores):
+            continue
+        fig.add_trace(go.Bar(
+            y=locs, x=valores, name=f"Riesgo {nivel.lower()}" if nivel != "Prorrogada" else "Ya prorrogada",
+            orientation="h", width=0.62,
+            marker=dict(color=COLOR_RIESGO[nivel], line=dict(color="#fffdf9", width=2)),
+            hovertemplate=f"<b>%{{y}}</b><br>{nivel}: %{{x}} obras<extra></extra>",
+        ))
+    _layout(
+        fig,
+        height=max(220, 26 * len(locs) + 70),
+        barmode="stack",
+        showlegend=True,
+        legend=dict(orientation="h", yanchor="bottom", y=1.0, x=0, font=dict(size=11, color=TEXTO)),
+        margin=dict(l=8, r=16, t=32, b=8),
+        xaxis=dict(gridcolor=GRILLA, zeroline=False, tickfont=dict(size=10), dtick=1 if len(obras) < 15 else None,
+                   title=dict(text="Obras", font=dict(size=11))),
+        yaxis=dict(tickfont=dict(size=12, color=TEXTO), automargin=True),
+    )
+
+    altos = {l: grupos[l]["Alto"] for l in locs if grupos[l]["Alto"]}
+    n_alto = sum(altos.values())
+    if not altos:
+        insight = "Ninguna obra en ejecución tiene riesgo alto de prórroga con estos filtros."
+    else:
+        top = max(altos, key=altos.get)
+        insight = f"{_plural(n_alto, 'obra tiene', 'obras tienen')} riesgo alto de prórroga"
+        if len(altos) == 1:
+            insight += f", {'en' if n_alto == 1 else 'todas en'} {top}."
+        else:
+            insight += f"; {top} concentra {altos[top]}."
+    return _a_json(fig), insight
+
+
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
@@ -384,6 +461,8 @@ def dashboard(
     fig_loc, insight_loc, n_loc = _grafico_por_localidad(obras, resumen["avance"])
     fig_estados, leyenda_estados, insight_estados = _grafico_estados(resumen)
     fig_etapas, insight_etapas = _grafico_etapas(obras)
+    modelo = _modelo_activo()
+    fig_riesgo, insight_riesgo = _grafico_riesgo_localidad(obras, modelo)
 
     actualizaciones = [o["actualizacion"] for o in todas if o["actualizacion"]]
     return {
@@ -395,4 +474,18 @@ def dashboard(
         "avance_localidad": {"figura": fig_loc, "n_localidades": n_loc, "insight": insight_loc},
         "estados": {"figura": fig_estados, "leyenda": leyenda_estados, "insight": insight_estados},
         "etapas": {"figura": fig_etapas, "total": resumen["total"], "insight": insight_etapas},
+        "riesgo_localidad": {
+            "figura": fig_riesgo,
+            "insight": insight_riesgo,
+            "n_alto": resumen["riesgoAlto"],
+            "por_nivel": dict(Counter(o["riesgo"] for o in obras)),
+            "colores": COLOR_RIESGO,
+            "umbrales": UMBRALES,
+            "modelo": {
+                "entrenado": modelo is not None,
+                "version": modelo["version"] if modelo else None,
+                "nombre": NOMBRE_MODELO.get(modelo["modelo"]) if modelo else None,
+                "supera_linea_base": modelo["supera_linea_base"] if modelo else None,
+            },
+        },
     }

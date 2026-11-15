@@ -3,6 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db import fetch_all, fetch_one
+from app.routers.modelo import NOMBRE_MODELO, NOTA_RIESGO, SQL_VERSION_ACTIVA, UMBRALES
 
 router = APIRouter(prefix="/obras", tags=["obras"])
 
@@ -56,21 +57,27 @@ def obras_geojson(localidad: str | None = None, estado: str | None = None):
 
 @router.get("/mapa")
 def obras_mapa():
-    """Obras con coordenadas (v_obras_mapa) + tipo de contrato y estado de seguimiento.
+    """Obras con coordenadas (v_obras_mapa) + tipo de contrato, estado de seguimiento
+    y riesgo de atraso (modelo de prórroga; 'Sin calcular' si aún no se ha entrenado).
 
     Son ~120 filas: el frontend las carga una vez y filtra en el navegador.
     """
     return fetch_all(
-        """
+        f"""
         SELECT m.objectid, m.nombre, m.etapa, m.contrato, m.estado_contrato,
                m.avance_programado, m.avance_ejecutado, m.contratista, m.valor_contrato,
                m.fecha_inicio, m.fecha_fin, m.interventoria_contratista,
                m.localidad_codigo, m.localidad_nombre, m.en_secop, m.secop_url,
                m.lon, m.lat,
                s.contrato_tipo, s.estado_seguimiento, s.brecha_pp,
-               s.codigo_sigidu, s.total_pagado, s.fecha_actualizacion, s.interventoria_contrato
+               s.codigo_sigidu, s.total_pagado, s.fecha_actualizacion, s.interventoria_contrato,
+               coalesce(r.nivel, 'Sin calcular') AS riesgo_nivel,
+               r.probabilidad                    AS riesgo_probabilidad,
+               c.dias_adicionados
         FROM v_obras_mapa m
         JOIN v_obras_seguimiento s USING (objectid)
+        LEFT JOIN clean_secop c ON c.id_contrato = s.secop_id_contrato
+        LEFT JOIN ml_riesgo_obra r ON r.objectid = m.objectid AND r.version = {SQL_VERSION_ACTIVA}
         ORDER BY m.objectid
         """
     )
@@ -94,6 +101,37 @@ def estados():
         "SELECT estado_contrato, count(*) AS n FROM v_obras_mapa "
         "WHERE estado_contrato IS NOT NULL GROUP BY 1 ORDER BY 2 DESC"
     )
+
+
+@router.get("/{objectid}/riesgo")
+def riesgo_obra(objectid: str):
+    """Riesgo de atraso de una obra: nivel, probabilidad de prórroga de su contrato y los
+    tres factores que más influyen. Es una estimación estadística, no un dato oficial del IDU."""
+    fila = fetch_one(
+        f"""
+        SELECT s.objectid, s.nombre, s.secop_id_contrato AS id_contrato, s.estado_seguimiento,
+               c.dias_adicionados,
+               coalesce(r.nivel, 'Sin calcular') AS nivel,
+               r.probabilidad, r.factores,
+               mm.version, mm.modelo, mm.supera_linea_base, mm.entrenado_en
+        FROM v_obras_seguimiento s
+        LEFT JOIN clean_secop c ON c.id_contrato = s.secop_id_contrato
+        LEFT JOIN ml_prorroga_metricas mm ON mm.version = {SQL_VERSION_ACTIVA} AND mm.seleccionado
+        LEFT JOIN ml_riesgo_obra r ON r.objectid = s.objectid AND r.version = mm.version
+        WHERE s.objectid::text = %(id)s
+        """,
+        {"id": objectid},
+    )
+    if fila is None:
+        raise HTTPException(status_code=404, detail="Obra no encontrada")
+    return {
+        **fila,
+        "probabilidad": None if fila["probabilidad"] is None else float(fila["probabilidad"]),
+        "factores": fila["factores"] or [],
+        "modelo_nombre": NOMBRE_MODELO.get(fila["modelo"]) if fila["modelo"] else None,
+        "umbrales": UMBRALES,
+        "nota": NOTA_RIESGO,
+    }
 
 
 @router.get("/{objectid}")

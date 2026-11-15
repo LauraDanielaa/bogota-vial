@@ -11,7 +11,7 @@ import {
   useMapEvents,
 } from "react-leaflet";
 import Icon from "./Icon.jsx";
-import { colorAvance } from "../utils/stats.js";
+import { colorAvance, colorRiesgo, textoRiesgo } from "../utils/stats.js";
 
 // Área urbana de Bogotá
 const LIMITES = [
@@ -120,9 +120,13 @@ function Controles({ base, onBase, contorno }) {
 
 const pctTexto = (v) => (v === null || v === undefined ? "sin dato" : `${Math.round(v)} %`);
 
-export default function MapaObras({ obras, seleccionadaId, onSeleccionar, contorno, etiquetaZona }) {
+/** verPor: "avance" (color por avance físico) o "riesgo" (color por riesgo de atraso). */
+export default function MapaObras({ obras, seleccionadaId, onSeleccionar, contorno, etiquetaZona, verPor = "avance" }) {
   const [base, setBase] = useState("calles");
   const seleccionada = obras.find((o) => o.id === seleccionadaId);
+  const color = (o) => (verPor === "riesgo" ? colorRiesgo(o.riesgo) : colorAvance(o.avance));
+  const etiqueta = (o) =>
+    `${o.corto} · ${verPor === "riesgo" ? textoRiesgo(o.riesgo, o.probRiesgo, o.diasAdicionados) : pctTexto(o.avance)}`;
 
   const clicObra = (id) => (e) => {
     L.DomEvent.stopPropagation(e);
@@ -149,11 +153,11 @@ export default function MapaObras({ obras, seleccionadaId, onSeleccionar, contor
               key={o.id}
               center={[o.lat, o.lon]}
               radius={8}
-              pathOptions={{ color: "#fff", weight: 2, fillColor: colorAvance(o.avance), fillOpacity: 0.95 }}
+              pathOptions={{ color: "#fff", weight: 2, fillColor: color(o), fillOpacity: 0.95 }}
               eventHandlers={{ click: clicObra(o.id) }}
             >
               <Tooltip direction="top" offset={[0, -8]}>
-                {o.corto} · {pctTexto(o.avance)}
+                {etiqueta(o)}
               </Tooltip>
             </CircleMarker>
           )
@@ -165,17 +169,17 @@ export default function MapaObras({ obras, seleccionadaId, onSeleccionar, contor
               center={[seleccionada.lat, seleccionada.lon]}
               radius={20}
               interactive={false}
-              pathOptions={{ stroke: false, fillColor: colorAvance(seleccionada.avance), fillOpacity: 0.28 }}
+              pathOptions={{ stroke: false, fillColor: color(seleccionada), fillOpacity: 0.28 }}
             />
             <CircleMarker
               key={`sel-${seleccionada.id}`}
               center={[seleccionada.lat, seleccionada.lon]}
               radius={11}
-              pathOptions={{ color: "#fff", weight: 3, fillColor: colorAvance(seleccionada.avance), fillOpacity: 1 }}
+              pathOptions={{ color: "#fff", weight: 3, fillColor: color(seleccionada), fillOpacity: 1 }}
               eventHandlers={{ click: (e) => L.DomEvent.stopPropagation(e) }}
             >
               <Tooltip permanent direction="right" offset={[16, 0]} className="map-label">
-                {seleccionada.corto} · {pctTexto(seleccionada.avance)}
+                {etiqueta(seleccionada)}
               </Tooltip>
             </CircleMarker>
           </>
