@@ -15,7 +15,7 @@ import plotly.graph_objects as go
 from fastapi import APIRouter, Query
 
 from app.db import fetch_all, fetch_one
-from app.routers.modelo import NOMBRE_MODELO, SQL_VERSION_ACTIVA, UMBRALES
+from app.routers.modelo import NOMBRE_MODELO, UMBRALES, fuentes_riesgo
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -116,6 +116,7 @@ def _layout(fig: go.Figure, **extra):
 # Datos
 # ---------------------------------------------------------------------------
 def _cargar_obras():
+    fuentes = fuentes_riesgo()
     filas = fetch_all(
         f"""
         SELECT s.objectid, nombre, etapa, contrato_tipo, estado_seguimiento,
@@ -125,7 +126,7 @@ def _cargar_obras():
                fecha_actualizacion,
                coalesce(r.nivel, 'Sin calcular') AS riesgo_nivel
         FROM v_obras_seguimiento s
-        LEFT JOIN ml_riesgo_obra r ON r.objectid = s.objectid AND r.version = {SQL_VERSION_ACTIVA}
+        LEFT JOIN {fuentes["riesgo_obra"]} r ON r.objectid = s.objectid AND r.version = {fuentes["version"]}
         """
     )
     obras = []
@@ -378,12 +379,14 @@ def _grafico_etapas(obras):
 
 
 def _modelo_activo():
-    """Modelo de riesgo seleccionado en la versión activa (None si no se ha entrenado)."""
+    """Modelo de riesgo seleccionado en la versión activa (None si no se ha entrenado
+    o si la base aún no tiene las tablas del modelo)."""
+    fuentes = fuentes_riesgo()
     return fetch_one(
         f"""
         SELECT version, modelo, supera_linea_base, entrenado_en
-        FROM ml_prorroga_metricas
-        WHERE version = {SQL_VERSION_ACTIVA} AND seleccionado
+        FROM {fuentes["metricas"]} mm
+        WHERE version = {fuentes["version"]} AND seleccionado
         """
     )
 

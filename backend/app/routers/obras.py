@@ -3,7 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db import fetch_all, fetch_one
-from app.routers.modelo import NOMBRE_MODELO, NOTA_RIESGO, SQL_VERSION_ACTIVA, UMBRALES
+from app.routers.modelo import NOMBRE_MODELO, NOTA_RIESGO, UMBRALES, fuentes_riesgo
 
 router = APIRouter(prefix="/obras", tags=["obras"])
 
@@ -62,6 +62,7 @@ def obras_mapa():
 
     Son ~120 filas: el frontend las carga una vez y filtra en el navegador.
     """
+    f = fuentes_riesgo()
     return fetch_all(
         f"""
         SELECT m.objectid, m.nombre, m.etapa, m.contrato, m.estado_contrato,
@@ -77,7 +78,7 @@ def obras_mapa():
         FROM v_obras_mapa m
         JOIN v_obras_seguimiento s USING (objectid)
         LEFT JOIN clean_secop c ON c.id_contrato = s.secop_id_contrato
-        LEFT JOIN ml_riesgo_obra r ON r.objectid = m.objectid AND r.version = {SQL_VERSION_ACTIVA}
+        LEFT JOIN {f["riesgo_obra"]} r ON r.objectid = m.objectid AND r.version = {f["version"]}
         ORDER BY m.objectid
         """
     )
@@ -107,6 +108,7 @@ def estados():
 def riesgo_obra(objectid: str):
     """Riesgo de atraso de una obra: nivel, probabilidad de prórroga de su contrato y los
     tres factores que más influyen. Es una estimación estadística, no un dato oficial del IDU."""
+    f = fuentes_riesgo()
     fila = fetch_one(
         f"""
         SELECT s.objectid, s.nombre, s.secop_id_contrato AS id_contrato, s.estado_seguimiento,
@@ -116,8 +118,8 @@ def riesgo_obra(objectid: str):
                mm.version, mm.modelo, mm.supera_linea_base, mm.entrenado_en
         FROM v_obras_seguimiento s
         LEFT JOIN clean_secop c ON c.id_contrato = s.secop_id_contrato
-        LEFT JOIN ml_prorroga_metricas mm ON mm.version = {SQL_VERSION_ACTIVA} AND mm.seleccionado
-        LEFT JOIN ml_riesgo_obra r ON r.objectid = s.objectid AND r.version = mm.version
+        LEFT JOIN {f["metricas"]} mm ON mm.version = {f["version"]} AND mm.seleccionado
+        LEFT JOIN {f["riesgo_obra"]} r ON r.objectid = s.objectid AND r.version = mm.version
         WHERE s.objectid::text = %(id)s
         """,
         {"id": objectid},
