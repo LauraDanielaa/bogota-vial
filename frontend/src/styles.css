@@ -209,8 +209,8 @@ a {
   min-width: 0;
 }
 .brand-logo {
-  width: 40px;
-  height: 40px;
+  width: 56px;
+  height: 56px;
   display: block;
   object-fit: contain;
   flex-shrink: 0;

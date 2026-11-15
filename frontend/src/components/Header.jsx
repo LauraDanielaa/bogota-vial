@@ -11,7 +11,7 @@ export default function Header({ vista, onNavegar }) {
     <header className="header">
       <div className="header-inner">
         <a className="brand" href="#/" onClick={(e) => { e.preventDefault(); onNavegar("mapa"); }}>
-          <img className="brand-logo" src="/favicon.png" alt="" width="40" height="40" />
+          <img className="brand-logo" src="/favicon.png" alt="" width="56" height="56" />
           <span className="brand-name">Bogotá Vial</span>
           <span className="brand-divider" />
           <span className="brand-tagline">Observatorio de obras viales</span>
