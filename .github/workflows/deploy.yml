@@ -4,6 +4,12 @@
 # Configuración (GitHub -> Settings -> Secrets and variables -> Actions):
 #   Secrets:   VPS_HOST (IP del servidor), VPS_USER (ubuntu), VPS_SSH_KEY (llave privada)
 #   Variables: DESPLIEGUE_ACTIVO = true   (mientras no exista el servidor, dejarla sin crear)
+#
+# Riesgo de atraso (modelo ml/riesgo_prorroga): se calcula solo en el primer despliegue
+# (cuando la base aún no tiene un modelo entrenado) con deploy/calcular-riesgo.sh.
+# Los despliegues siguientes conservan el riesgo ya calculado. Para recalcularlo
+# (p. ej. con datos nuevos): Actions -> Verificar y desplegar -> Run workflow ->
+# marcar "Volver a calcular el riesgo de atraso".
 
 name: Verificar y desplegar
 
@@ -13,6 +19,11 @@ on:
   pull_request:
     branches: [main]
   workflow_dispatch: # botón "Run workflow" para desplegar a mano
+    inputs:
+      recalcular_riesgo:
+        description: "Volver a calcular el riesgo de atraso (ETL + modelo)"
+        type: boolean
+        default: false
 
 concurrency:
   group: despliegue-${{ github.ref }}
@@ -75,13 +86,22 @@ jobs:
             docker image prune -f
 
             # Esperar a que la API responda (máx. ~2 min)
+            en_linea=no
             for i in $(seq 1 24); do
               if $COMPOSE exec -T backend python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=3)" 2>/dev/null; then
                 echo "API en línea"
-                exit 0
+                en_linea=si
+                break
               fi
               sleep 5
             done
-            echo "La API no respondió después del despliegue"
-            $COMPOSE logs --tail=80 backend
-            exit 1
+            if [ "$en_linea" != si ]; then
+              echo "La API no respondió después del despliegue"
+              $COMPOSE logs --tail=80 backend
+              exit 1
+            fi
+
+            # Riesgo de atraso: solo se calcula si la base aún no tiene un modelo entrenado,
+            # o si se pidió desde "Run workflow" (casilla recalcular_riesgo)
+            bash deploy/calcular-riesgo.sh ${{ inputs.recalcular_riesgo && '--forzar' || '' }}
+            docker image prune -f

@@ -53,6 +53,8 @@ docker compose run --rm ml riesgo_prorroga     # 2. entrena, imprime las métric
 - Volver a correr el ETL **no** borra las predicciones. Si cambian los datos, hay que reentrenar para
   que el riesgo se recalcule.
 - Mientras el modelo no se haya entrenado, la web muestra el riesgo como "Sin calcular".
+- En producción no hace falta correrlo a mano: el despliegue automático lo calcula la primera vez y
+  después conserva ese riesgo (ver [Despliegue en producción](#despliegue-en-producción)).
 
 ## Desarrollo local (sin Docker para la app)
 
@@ -93,6 +95,7 @@ Internet ─HTTPS→ Caddy (80/443) → frontend (nginx, /api) → backend (Fast
 | `deploy/Caddyfile` | HTTPS automático para `DOMINIO` (y `www.` redirige) |
 | `deploy/setup-servidor.sh` | Prepara el servidor: Docker, swap, llaves, clon del repo, backups |
 | `deploy/backup.sh` | Respaldo diario de la base (`pg_dump`), guarda los últimos 7 |
+| `deploy/calcular-riesgo.sh` | Corre ETL + modelo de riesgo solo si la base aún no tiene un modelo entrenado |
 | `.github/workflows/deploy.yml` | En cada push a `main`: verifica y, si está activo, despliega por SSH |
 
 Primer despliegue (en el servidor):
@@ -108,6 +111,16 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm etl
 Despliegue automático: en GitHub → Settings → Secrets and variables → Actions, crear los secrets
 `VPS_HOST`, `VPS_USER` y `VPS_SSH_KEY`, y la variable `DESPLIEGUE_ACTIVO=true`. Desde ahí, cada push a
 `main` se publica solo (pestaña **Actions** para ver el resultado).
+
+Riesgo de atraso en producción: después de levantar los contenedores, el despliegue corre
+`deploy/calcular-riesgo.sh`.
+
+- **Primer despliegue** (la base no tiene modelo): corre el ETL y entrena el modelo. La primera vez tarda
+  unos minutos más, porque construye la imagen de ML.
+- **Despliegues siguientes**: no vuelve a entrenar; se conserva el riesgo ya calculado.
+- **Para recalcularlo** (p. ej. después de copiar datos nuevos a `data/`): GitHub → **Actions** →
+  *Verificar y desplegar* → **Run workflow** → marcar *Volver a calcular el riesgo de atraso*.
+  En el servidor también se puede: `bash deploy/calcular-riesgo.sh --forzar`.
 
 ## Endpoints principales
 
