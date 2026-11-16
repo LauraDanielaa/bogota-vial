@@ -1,133 +1,132 @@
 # Contratos atípicos
 
-Señala los contratos del IDU que **se salen de lo habitual** frente a los demás contratos del IDU en SECOP II,
-y explica en español en qué se diferencian. Es un modelo **no supervisado**: no hay etiquetas de "contrato
-atípico", así que no se puede medir su acierto, solo su estabilidad y revisar a mano sus resultados.
+Este modelo busca, entre los 913 contratos del IDU en SECOP II, los que se salen de lo habitual, y explica en
+qué se diferencian de los contratos parecidos. En la web aparecen solo los que tienen obra en el mapa: una
+etiqueta "Contrato atípico" en el listado, un anillo punteado alrededor del punto en el mapa y una fila en el
+dashboard.
 
-> Que un contrato sea atípico **no** significa que haya una irregularidad; puede deberse al tamaño o la
-> complejidad de la obra. Por eso la web nunca usa palabras como "irregular" o "sospechoso", no muestra el
-> puntaje ni rankings, y no muestra datos del contratista.
+Que un contrato sea atípico no quiere decir que tenga algo irregular. Puede ser simplemente una obra más
+grande o más compleja que las demás. Por eso la web no muestra el puntaje del modelo, no arma rankings, no
+muestra datos del contratista y siempre acompaña la marca con esa aclaración.
 
 ```bash
-docker compose run --rm etl                                              # primero el ETL
-docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos  # luego el modelo
+docker compose run --rm etl
+docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos
 ```
-
-## Archivos
 
 | Archivo | Qué hace |
 |---|---|
-| `ejecutar.py` | Script principal (`main()`): revisa el commit, calcula, valida, imprime y escribe en la base |
-| `datos.py` | Lee los contratos y arma las variables (reutiliza `riesgo_prorroga.datos.leer_contratos` y `comun.db`) |
+| `ejecutar.py` | Script principal: revisa el commit, calcula, valida, imprime el resumen y guarda en la base |
+| `datos.py` | Lee los contratos y arma las variables. Reutiliza `leer_contratos` del modelo de riesgo y la conexión de `comun/` |
 | `modelo.py` | IsolationForest, sus parámetros y las semillas de validación |
-| `motivos.py` | Compara cada contrato con su grupo de referencia y redacta los motivos |
+| `motivos.py` | Compara cada contrato con su grupo y redacta los motivos |
 
-## Datos
+## Datos y variables
 
-- Fuente: la vista del modelo de riesgo, `v_ml_contratos` (`etl/sql/06_ml.sql`): los **913 contratos** de
-  `clean_secop`. De `clean_secop` se toma aparte el enlace del proceso en SECOP II, solo para revisar a mano.
-- Se entrena y se califica con los 913, porque son la población de referencia. En la web solo aparecen los
-  que tienen obra en el mapa (`v_obras_mapa` cruzada por `secop_id_contrato`); todas las obras de un
-  contrato atípico llevan la marca.
+Usa la misma vista que el modelo de riesgo, `v_ml_contratos`, y aparte toma de `clean_secop` el enlace de
+cada proceso en SECOP (solo para poder revisarlos a mano). El modelo se entrena y califica con los 913
+contratos, porque son la población contra la que se compara cada uno.
 
-## Variables
-
-| Variable | Origen |
+| Variable | Cómo se calcula |
 |---|---|
-| `log_valor` | log(1 + valor del contrato) |
-| `plazo_dias` | plazo **pactado**, del texto `duraci_n_del_contrato` (`24 Mes(es)` → 720 días). No usa `fecha_fin`, que ya incluye las prórrogas |
-| `log_valor_dia` | log(1 + valor / plazo pactado) |
-| `dias_adicionados` | días de prórroga registrados en SECOP |
-| `tipo_de_contrato`, `modalidad_de_contratacion` | one-hot; las categorías con menos de 10 contratos se agrupan, para que nadie quede marcado solo por ser de una modalidad poco común |
+| Valor | log(1 + valor del contrato) |
+| Plazo pactado | En días, del texto `duraci_n_del_contrato`. No se usa la fecha de fin, porque ya incluye las prórrogas |
+| Valor por día | log(1 + valor / plazo pactado) |
+| Días adicionados | Días de prórroga registrados en SECOP |
+| Tipo y modalidad | One-hot. Las categorías con menos de 10 contratos se agrupan, para que un contrato no quede marcado solo por tener una modalidad poco común |
 
-194 contratos no traen el plazo pactado (`No definido` o sin número): se completa con la mediana de su tipo y
-modalidad para que el modelo los pueda calificar, pero ese plazo nunca se usa como motivo ni se dibuja.
+A 194 contratos les falta el plazo pactado (`No definido` o el texto sin número). Para poder calificarlos se
+les pone la mediana de su tipo y modalidad, pero ese plazo inventado nunca se usa como motivo ni se dibuja en
+el gráfico.
 
-## Modelo
+## El modelo
 
-`IsolationForest` de scikit-learn: 500 árboles, **contaminación 5 %** (marca ~45 de 913) y **semilla fija 42**.
-Cada ejecución entrena con todos los contratos y no guarda el modelo: se vuelve a calcular en cada push.
+Es un IsolationForest de scikit-learn con 500 árboles, una contaminación del 5 % (marca unos 45 de los 913) y
+la semilla fija en 42. No se guarda el modelo entrenado: se vuelve a calcular en cada push, y lo que importa
+(resultados, parámetros y validación) queda en la base.
 
-## Motivos
+## Los motivos
 
-IsolationForest no dice por qué aísla un contrato. Por eso, aparte, cada variable del contrato se compara con
-la **mediana de los contratos de su mismo tipo y modalidad** (si ese grupo tiene menos de 8 contratos, con la
-de su tipo; si tampoco, con la de todos):
+IsolationForest dice qué contratos están aislados, pero no por qué. El motivo se calcula aparte: cada variable
+del contrato se compara con la mediana de los contratos de su mismo tipo y modalidad. Si ese grupo tiene menos
+de 8 contratos, se compara con los de su mismo tipo, y si tampoco alcanza, con todos.
 
-- Valor, plazo pactado y valor por día: es un motivo claro si es al menos **el doble o la mitad** de la mediana.
-- Días adicionados: como en casi todos los grupos la mediana es 0, se compara con un colchón de 90 días y solo
-  hacia arriba (con mediana 0, hacen falta al menos 90 días adicionados).
-- El valor por día solo es motivo si ni el valor ni el plazo lo son por sí solos (si no, repite lo mismo).
-- Se redactan las **una a tres diferencias más grandes**, por ejemplo:
-  - *Valor 14 veces mayor que la mediana de contratos de obra por licitación pública*
-  - *Plazo pactado de 43 meses, 3,3 veces lo habitual para contratos de otro tipo por contratación directa (13 meses)*
-  - *526 días adicionados; la mayoría de contratos de obra no tiene días adicionados*
+- En el valor, el plazo y el valor por día, una diferencia cuenta si el contrato tiene al menos el doble o la
+  mitad de la mediana.
+- En los días adicionados la mediana casi siempre es 0, así que la comparación lleva un colchón de 90 días y
+  solo cuenta hacia arriba: hacen falta al menos 90 días adicionados para que sea un motivo. Tener menos
+  prórroga que el resto no es un motivo.
+- El valor por día es el cociente de los otros dos, así que solo se usa si ni el valor ni el plazo son motivo
+  por sí solos.
+- Se redactan las una a tres diferencias más grandes.
 
-**Un contrato que el modelo aísla pero que no tiene ningún motivo claro no se marca como atípico** (en la
-ejecución de referencia, 9 de 45: todos con valor 0 en SECOP, como los comodatos, que el bosque aísla por su
-valor pero para los que no hay una diferencia que se pueda explicar frente a su grupo).
+Algunos ejemplos reales:
 
-## Validación
+- "Valor 14 veces mayor que la mediana de contratos de obra por licitación pública"
+- "Plazo pactado de 43 meses, 3,3 veces lo habitual para contratos de otro tipo por contratación directa (13 meses)"
+- "526 días adicionados; la mayoría de contratos de obra no tiene días adicionados"
 
-Como no hay etiquetas:
+Si el modelo aísla un contrato pero no se le encuentra ningún motivo claro, no se marca como atípico. En la
+ejecución actual pasa con 9 de los 45: todos tienen valor 0 en SECOP (comodatos y similares). El bosque los
+aísla por ese valor, pero frente a su grupo no hay una diferencia que se pueda explicar.
 
-1. **Estabilidad**: se repite el modelo con cinco semillas distintas (7, 21, 123, 2024, 31415) y se mide qué
-   porcentaje de los atípicos se mantiene. Si el promedio es menor al 70 %, se imprime una advertencia y queda
-   en `validacion.advertencia`.
-2. **Revisión a mano**: se imprimen los diez contratos más atípicos con sus motivos y su enlace a SECOP.
+## Cómo sabemos si funciona
 
-Todo queda en la columna `validacion` (JSON) de `ml_atipicos_ejecucion`.
+No hay etiquetas de "contrato atípico", así que no se puede medir un acierto. Hacemos dos cosas:
 
-Ejecución de referencia (commit `1c1d818`, datos de noviembre de 2026):
+1. Repetimos el modelo con otras cinco semillas (7, 21, 123, 2024 y 31415) y medimos qué porcentaje de los
+   contratos marcados sigue saliendo. Si en promedio baja del 70 %, el script lo advierte.
+2. Imprimimos los diez contratos más atípicos con sus motivos y su enlace a SECOP para revisarlos a mano.
+
+Las dos cosas quedan guardadas en la columna `validacion` de `ml_atipicos_ejecucion`.
+
+Resultado actual:
 
 | | |
 |---|---|
 | Contratos analizados | 913 |
 | Aislados por IsolationForest | 45 |
-| **Atípicos** (aislados y con motivo claro) | **36** |
-| Atípicos con obra en el mapa | 4 contratos → 11 obras |
-| Estabilidad con otras semillas | 94 % en promedio (89 %–97 %); 78 % se mantiene en las cinco |
+| Atípicos (aislados y con al menos un motivo) | 36 |
+| Atípicos con obra en el mapa | 4 contratos, que suman 11 obras |
+| Estabilidad con otras semillas | 94 % en promedio (entre 89 % y 97 %); el 78 % sale con las cinco |
 
-## Salidas
+## Dónde quedan los resultados
 
 | Tabla | Qué guarda |
 |---|---|
-| `ml_atipicos_ejecucion` | Una fila por ejecución: versión, fecha, **commit de git**, `exitosa`, conteos, estabilidad, parámetros y validación (por semilla y los diez más atípicos). Las fallidas quedan con `exitosa = false` y el error, sin resultados |
-| `ml_atipicos_contrato` | Una fila por contrato y ejecución: referencia, tipo, modalidad, valor, plazo, días adicionados, `marcado_modelo`, `es_atipico`, `puntaje` y `motivos` (JSON) |
-| `v_atipicos_ejecucion_activa` | La última ejecución exitosa: la única que lee el backend |
-
-El ETL crea las tablas si no existen y nunca las borra.
+| `ml_atipicos_ejecucion` | Una fila por ejecución: versión, fecha, commit de git, si fue exitosa, conteos, estabilidad, parámetros y validación. Si una ejecución falla, queda registrada con el error y sin resultados |
+| `ml_atipicos_contrato` | Una fila por contrato en cada ejecución: referencia, tipo, modalidad, valor, plazo, días adicionados, si el modelo lo aisló, si quedó atípico, su puntaje y sus motivos |
+| `v_atipicos_ejecucion_activa` | La última ejecución exitosa. Es lo único que lee el backend |
 
 ## Cuándo se ejecuta
 
-- **Producción**: en cada push a `main`, el job de despliegue (`.github/workflows/deploy.yml`), después de
-  levantar los contenedores y verificar la API, corre `deploy/calcular-atipicos.sh <commit>`: ETL y luego este
-  modelo.
-- **Una sola vez por push**: el commit queda en `ml_atipicos_ejecucion`. Si ya hay una ejecución exitosa para
-  ese commit (p. ej. se volvió a lanzar el workflow), el script de despliegue no corre ni el ETL, y este script
-  termina sin hacer nada. Un índice único y un candado de la base evitan duplicados si dos ejecuciones coinciden.
-- **Una sola transacción**: la ejecución y los 913 resultados se escriben juntos. Si algo falla, no queda nada a
-  medias y la web sigue mostrando la ejecución anterior; el paso del workflow falla con una advertencia
-  visible, pero el despliegue no se cae.
-- **Local**: solo a mano, con el comando de arriba. No corre con `docker compose up` ni en los pull requests.
-  Sin `COMMIT_GIT` (y sin git disponible) la ejecución no se puede deduplicar y corre siempre.
+En producción corre solo en cada push a `main`, desde `deploy/actualizar-modelos.sh` (ver
+[ml/README.md](../README.md#en-producción)). Hay tres cosas que lo hacen seguro:
+
+- **Una vez por commit.** El commit queda guardado en `ml_atipicos_ejecucion`. Si ya hay una ejecución exitosa
+  para ese commit, por ejemplo porque alguien volvió a lanzar el workflow, no se hace nada. Un índice único y
+  un candado en la base evitan duplicados aunque dos ejecuciones coincidan.
+- **Una sola transacción.** La ejecución y los 913 resultados se guardan juntos o no se guarda nada. Si algo
+  falla, la web sigue mostrando la ejecución anterior.
+- **Sin tumbar el despliegue.** Si el modelo falla, el workflow lo muestra como advertencia, pero el sitio
+  sigue en línea.
+
+En local solo corre a mano. Sin `COMMIT_GIT` (y sin git disponible) no hay forma de saber si ya se corrió, así
+que corre siempre.
 
 ## Limitaciones
 
-- **Atípico no es irregular.** El modelo solo dice que un contrato es distinto de los demás en seis variables;
-  no sabe nada de su objeto, su complejidad ni su ejecución. Los motivos hay que leerlos con ese contexto.
-- **Los días adicionados pesan mucho.** Más de la mitad de los diez más atípicos lo son, en parte, por sus
-  prórrogas. Eso se cruza con el modelo de riesgo de atraso (que estima justamente las prórrogas) y hace que
-  los contratos viejos y ya prorrogados tengan más opciones de quedar marcados que los recientes.
-- **Errores de captura en SECOP.** Algunos plazos pactados son poco creíbles (p. ej. consultorías de 305 o
-  345 meses) y salen como atípicos. El modelo no los corrige: precisamente ayuda a encontrarlos.
-- **Grupos pequeños.** Hay muchas combinaciones de tipo y modalidad con pocos contratos; para ellas la
-  comparación se hace con el tipo o con todos los contratos, que es una referencia más gruesa.
-- **Plazos imputados.** 194 contratos sin plazo pactado se califican con un plazo supuesto (la mediana de su
-  grupo); su plazo y su valor por día nunca son motivo y no aparecen en el gráfico de dispersión.
-- **Contaminación fija.** El 5 % es una decisión, no un dato: siempre habrá ~45 contratos aislados aunque los
-  datos cambien. El filtro de "motivo claro" baja ese número, pero no lo vuelve una medida absoluta.
-- **Sin etiquetas** no hay precisión ni recall: la estabilidad solo dice que el resultado no depende del azar,
-  no que sea correcto.
-- **Cada push recalcula con los datos que haya en el servidor.** Si `data/` no cambia, el resultado es el mismo
-  en cada push (semilla fija); cambia la fecha de la ejecución.
+- El modelo solo compara seis variables. No sabe nada del objeto del contrato ni de cómo se ejecutó, así que
+  los motivos hay que leerlos con ese contexto.
+- Los días adicionados pesan bastante: en 8 de los 10 contratos más atípicos aparecen entre los motivos. Esto
+  se cruza con el modelo de riesgo, que estima justamente las prórrogas, y favorece a los contratos viejos,
+  que han tenido más tiempo para prorrogarse.
+- Algunos datos de SECOP parecen mal capturados, como consultorías con plazos pactados de 305 o 345 meses.
+  Salen como atípicas y el modelo no las corrige; en parte sirve para encontrarlas.
+- Muchas combinaciones de tipo y modalidad tienen pocos contratos. Para esas, la comparación se hace contra
+  el tipo o contra todos, que es una referencia más gruesa.
+- El 5 % de contaminación es una decisión nuestra. El modelo siempre aísla unos 45 contratos, aunque los datos
+  cambien; el filtro de los motivos baja ese número, pero no lo vuelve una medida absoluta.
+- La estabilidad dice que el resultado no depende del azar, no que sea correcto.
+- En el gráfico del dashboard no aparecen 240 contratos: los que no tienen plazo pactado o tienen valor 0 no
+  se pueden dibujar en escala logarítmica.

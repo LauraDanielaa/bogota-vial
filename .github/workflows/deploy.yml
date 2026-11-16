@@ -1,20 +1,16 @@
-# Despliegue automático: en cada push a main se verifica que todo compile y,
-# si la variable del repo DESPLIEGUE_ACTIVO es "true", se actualiza el servidor por SSH.
+# Verificar y desplegar.
+#
+# En cada push o pull request a main se revisa que el proyecto compile. En los push a main,
+# si la variable DESPLIEGUE_ACTIVO es "true", además se actualiza el servidor por SSH:
+#   1. se baja el código y se reconstruyen los contenedores;
+#   2. se espera a que la API responda;
+#   3. se actualizan los datos y los modelos de ML (deploy/actualizar-modelos.sh). Cada modelo
+#      decide si le toca correr; si este paso falla, la web conserva los resultados que ya tenía
+#      y el workflow termina con una advertencia, sin tumbar el despliegue.
 #
 # Configuración (GitHub -> Settings -> Secrets and variables -> Actions):
 #   Secrets:   VPS_HOST (IP del servidor), VPS_USER (ubuntu), VPS_SSH_KEY (llave privada)
 #   Variables: DESPLIEGUE_ACTIVO = true   (mientras no exista el servidor, dejarla sin crear)
-#
-# Riesgo de atraso (modelo ml/riesgo_prorroga): se calcula solo en el primer despliegue
-# (cuando la base aún no tiene un modelo entrenado) con deploy/calcular-riesgo.sh.
-# Los despliegues siguientes conservan el riesgo ya calculado. Para recalcularlo
-# (p. ej. con datos nuevos): Actions -> Verificar y desplegar -> Run workflow ->
-# marcar "Volver a calcular el riesgo de atraso".
-#
-# Contratos atípicos (modelo ml/atipicos): en cada push a main, después de verificar la API,
-# deploy/calcular-atipicos.sh corre el ETL y el modelo UNA vez por commit (el commit queda en
-# ml_atipicos_ejecucion; si ya existe una ejecución exitosa para él, no se repite). Si falla,
-# la web sigue con la ejecución anterior y el workflow muestra una advertencia. No corre en PR.
 
 name: Verificar y desplegar
 
@@ -25,8 +21,8 @@ on:
     branches: [main]
   workflow_dispatch: # botón "Run workflow" para desplegar a mano
     inputs:
-      recalcular_riesgo:
-        description: "Volver a calcular el riesgo de atraso (ETL + modelo)"
+      recalcular_modelos:
+        description: "Volver a entrenar los modelos que se conservan entre despliegues (riesgo de atraso)"
         type: boolean
         default: false
 
@@ -57,13 +53,11 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Revisar sintaxis de backend y ETL
-        run: python -m compileall -q backend/app etl
+      - name: Revisar sintaxis de Python (backend, ETL y ML)
+        run: python -m compileall -q backend/app etl ml
 
-      - name: Revisar sintaxis de ML (riesgo de prórroga y contratos atípicos)
-        run: |
-          python -m compileall -q ml
-          bash -n deploy/calcular-riesgo.sh deploy/calcular-atipicos.sh
+      - name: Revisar sintaxis de los scripts de despliegue
+        run: for f in deploy/*.sh; do bash -n "$f"; done
 
       - name: Validar docker compose de producción
         env:
@@ -111,16 +105,10 @@ jobs:
               exit 1
             fi
 
-            # Riesgo de atraso: solo se calcula si la base aún no tiene un modelo entrenado,
-            # o si se pidió desde "Run workflow" (casilla recalcular_riesgo)
-            bash deploy/calcular-riesgo.sh ${{ inputs.recalcular_riesgo && '--forzar' || '' }}
-            docker image prune -f
-
-      # Contratos atípicos: ETL + modelo, una sola vez por commit (si el commit ya tiene una
-      # ejecución exitosa, no hace nada). Si falla, la web sigue con la ejecución anterior y
-      # el despliegue NO se cae (continue-on-error); el paso siguiente deja una advertencia.
-      - name: Contratos atípicos (ETL + modelo, una vez por commit)
-        id: atipicos
+      # ETL + modelos. Si falla, el despliegue sigue en pie (continue-on-error) y el paso
+      # siguiente deja la advertencia.
+      - name: Actualizar datos y modelos
+        id: modelos
         continue-on-error: true
         uses: appleboy/ssh-action@v1.2.0
         with:
@@ -129,18 +117,19 @@ jobs:
           key: ${{ secrets.VPS_SSH_KEY }}
           command_timeout: 30m
           script: |
-            set -e
             cd /opt/bogota-vial
-            bash deploy/calcular-atipicos.sh ${{ github.sha }}
+            bash deploy/actualizar-modelos.sh --commit ${{ github.sha }} ${{ inputs.recalcular_modelos && '--recalcular' || '' }}
+            estado=$?
             docker image prune -f
+            exit $estado
 
-      - name: Advertir si falló el modelo de contratos atípicos
-        if: steps.atipicos.outcome == 'failure'
+      - name: Advertir si no se pudieron actualizar los datos o los modelos
+        if: steps.modelos.outcome == 'failure'
         run: |
-          echo "::warning title=Contratos atípicos::El modelo de contratos atípicos falló para el commit ${GITHUB_SHA::12}. La web sigue mostrando la ejecución anterior. Revisa el log del paso 'Contratos atípicos'."
+          echo "::warning title=Datos y modelos::No se pudieron actualizar los datos o algún modelo para el commit ${GITHUB_SHA::12}. La web sigue con los resultados anteriores. Revisa el log del paso 'Actualizar datos y modelos'."
           {
-            echo "### ⚠️ Contratos atípicos: el modelo falló"
+            echo "### Datos y modelos sin actualizar"
             echo ""
-            echo "El despliegue terminó, pero el modelo no se ejecutó para el commit \`${GITHUB_SHA::12}\`."
-            echo "La web sigue mostrando la última ejecución exitosa."
+            echo "El despliegue terminó, pero la actualización de datos o de algún modelo falló para el commit \`${GITHUB_SHA::12}\`."
+            echo "La web sigue mostrando los últimos resultados guardados. El detalle está en el log del paso *Actualizar datos y modelos*."
           } >> "$GITHUB_STEP_SUMMARY"

@@ -193,7 +193,7 @@ LIMIT 1;
 --   v_atipicos_ejecucion_activa    última ejecución exitosa (la que lee el backend)
 --
 -- Las llena:  docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos
--- En producción corre sola, una vez por push a main (deploy/calcular-atipicos.sh).
+-- En producción corre sola, una vez por push a main (deploy/actualizar-modelos.sh).
 -- Igual que las demás tablas ml_*, se crean solo si no existen y el ETL no las borra.
 -- =====================================================================
 

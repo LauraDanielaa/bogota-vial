@@ -1,71 +1,112 @@
-# Riesgo de prórroga (riesgo de atraso)
+# Riesgo de atraso (modelo de prórroga)
 
-Estima la probabilidad de que un contrato del IDU sea **prorrogado**, es decir, que tenga días adicionados en
-SECOP II, y la lleva a cada obra del visor como un **riesgo de atraso**. Es una estimación estadística, no un dato
-oficial del IDU.
+Este modelo estima la probabilidad de que un contrato del IDU sea prorrogado, es decir, que termine con días
+adicionados en SECOP II. Esa probabilidad se lleva a cada obra del mapa como su riesgo de atraso: alto, medio
+o bajo. Es una estimación estadística hecha con contratos anteriores, no un dato oficial del IDU, y así se
+presenta en la web.
 
 ```bash
 docker compose run --rm etl                    # primero el ETL
-docker compose run --rm ml riesgo_prorroga     # luego el modelo
+docker compose run --rm ml riesgo_prorroga     # luego el modelo (un minuto, más o menos)
 ```
 
-## Datos
+| Archivo | Qué hace |
+|---|---|
+| `entrenar.py` | Script principal: compara los modelos, calibra el elegido, explica cada predicción y guarda los resultados |
+| `datos.py` | Lee los contratos y arma las variables; también define las columnas que el modelo no puede usar |
+| `modelos.py` | Los cuatro modelos candidatos |
+| `factores.py` | Calcula con SHAP los tres factores de cada contrato y los redacta en español |
 
-- Fuente: vista `v_ml_contratos` (`etl/sql/06_ml.sql`): los 913 contratos de `clean_secop` (sin prestación de
-  servicios) unidos por `id_contrato` con columnas de `stg_secop_contratos` que `clean_secop` no trae
-  (duración, si se puede prorrogar, categoría y código del proveedor).
-- Etiqueta: `prorrogado = 1` si `dias_adicionados > 0`.
-- **Vigentes** (sin días adicionados, ni terminados ni cerrados, y con fecha de fin posterior a la descarga):
-  todavía podrían prorrogarse, así que **no se usan para entrenar**; solo reciben predicción.
+## Con qué datos se entrena
+
+La fuente es la vista `v_ml_contratos` de `etl/sql/06_ml.sql`: los 913 contratos de `clean_secop` (todos los
+del IDU menos los de prestación de servicios), completados con algunas columnas de SECOP que `clean_secop` no
+trae, como la duración pactada o si el contrato se puede prorrogar.
+
+Un contrato cuenta como prorrogado si tiene días adicionados. Los contratos que todavía están vigentes y no se
+han prorrogado no sirven para entrenar, porque aún no se sabe cómo terminan; esos solo reciben una predicción.
+Con los datos actuales quedan 760 contratos para entrenar (275 prorrogados, el 36 %) y 153 vigentes.
 
 ## Variables
 
-Solo información conocida al firmar el contrato:
+Solo usamos lo que se sabe el día en que se firma el contrato:
 
-| Variable | Origen |
+| Variable | De dónde sale |
 |---|---|
-| `tipo_de_contrato`, `modalidad_de_contratacion`, `origen_de_los_recursos` | clean_secop |
-| `puede_prorrogarse` | `el_contrato_puede_ser_prorrogado` |
-| `familia_categoria` | 4 primeros dígitos UNSPSC de `codigo_de_categoria_principal` |
-| `log_valor` | log(1 + valor del contrato) |
-| `duracion_dias`, `duracion_sin_dato` | texto de `duraci_n_del_contrato` (`24 Mes(es)` → 720 días) |
-| `anio_firma`, `mes_firma` | fecha de firma |
-| `contratos_previos`, `tasa_prorroga_previa`, `sin_historial` | historial del contratista: solo contratos firmados **antes** del que se evalúa |
+| Tipo de contrato, modalidad y origen de los recursos | `clean_secop` |
+| Si se puede prorrogar | `el_contrato_puede_ser_prorrogado` |
+| Familia de la categoría | Los cuatro primeros dígitos del código UNSPSC |
+| Valor | En escala logarítmica |
+| Duración pactada | Del texto de SECOP (`24 Mes(es)` son 720 días), con una marca para cuando no viene |
+| Año y mes de firma | Fecha de firma |
+| Historial del contratista | Cuántos contratos tenía antes con el IDU y qué proporción de los ya terminados se prorrogó. Solo cuentan los firmados antes del contrato que se evalúa |
 
-**Prohibidas** (filtran la respuesta): `estado_contrato` ("Modificado" aparece en casi todos los prorrogados),
-`fecha_fin` y cualquier duración calculada con ella (ya incluye la prórroga), la fecha de notificación de prórroga
-y `ultima_actualizacion`. La vista no las expone y `entrenar.py` verifica con `assert` que ninguna entra al modelo.
+Hay columnas que delatan la respuesta y por eso están prohibidas: el estado del contrato ("Modificado"
+aparece en casi todos los prorrogados), la fecha de fin y cualquier duración calculada con ella (ya incluye la
+prórroga), la fecha de notificación de la prórroga y la última actualización. La vista no las expone y
+`entrenar.py` comprueba con `assert` que ninguna haya entrado al modelo.
 
-## Entrenamiento
+## Cómo se entrena
 
-- Candidatos, todos con clases balanceadas: línea base (prevalencia), regresión logística, random forest y
-  gradient boosting.
-- Validación cruzada estratificada de 5 pliegues y validación temporal (entrena hasta 2023, prueba 2024+).
-- Se elige el de mayor PR-AUC y se calibra (sigmoide). Las probabilidades de los contratos de entrenamiento son
-  **fuera de pliegue**; las de los vigentes salen del modelo calibrado entrenado con todo.
-- "Supera claramente a la línea base" = PR-AUC al menos 0,10 por encima en validación cruzada y 0,05 en la
-  validación temporal. Si no, se avisa en consola, en `ml_prorroga_metricas.nota` y en la web.
-- SHAP: los 3 factores con más peso de cada contrato, redactados en español
-  (p. ej. "El contratista prorrogó el 67 % de sus 3 contratos anteriores").
+Comparamos cuatro modelos, todos con las clases balanceadas: una línea base que siempre predice la tasa general
+de prórroga, regresión logística, random forest y gradient boosting. Cada uno se evalúa de dos formas:
 
-## Riesgo por obra
+- Validación cruzada estratificada de 5 pliegues.
+- Validación temporal: se entrena con los contratos firmados hasta 2023 y se prueba con los de 2024 en adelante,
+  que es lo más parecido a usarlo de verdad.
 
-Cada obra se cruza con su contrato por `secop_id_contrato` y recibe un nivel (función `clasificar_riesgo`), en orden:
+Se elige el de mayor PR-AUC en validación cruzada y se calibra con una sigmoide para que sus probabilidades
+signifiquen algo. Las probabilidades de los contratos de entrenamiento salen fuera de pliegue (el modelo nunca
+vio ese contrato); las de los vigentes salen del modelo entrenado con todo.
 
-1. **No aplica**: obra finalizada o caducada.
-2. **Sin dato**: sin contrato en SECOP.
-3. **Prorrogada**: su contrato ya tiene días adicionados (se guardan cuántos).
-4. **Alto** (≥ 60 %), **Medio** (≥ 30 %) o **Bajo** según la probabilidad.
+Exigimos que el modelo supere claramente a la línea base: al menos 0,10 de PR-AUC más en validación cruzada y
+0,05 más en la validación temporal. Si no lo logra, se avisa en la consola, en la tabla de métricas y en la web.
 
-## Salidas
+Resultado actual:
+
+| Modelo | PR-AUC (validación cruzada) | PR-AUC (2024 en adelante) |
+|---|---|---|
+| Línea base | 0,36 | 0,53 |
+| Regresión logística | 0,71 | 0,82 |
+| Random forest | 0,77 | 0,86 |
+| Gradient boosting (elegido) | 0,78 | 0,85 |
+
+Para explicar cada predicción usamos SHAP sobre el modelo sin calibrar (la calibración no cambia qué variables
+empujan hacia arriba o hacia abajo) y redactamos los tres factores con más peso, por ejemplo: "El contratista
+prorrogó el 67 % de sus 3 contratos anteriores".
+
+## Del contrato a la obra
+
+Cada obra se cruza con su contrato por `secop_id_contrato` y recibe un nivel con la función `clasificar_riesgo`.
+Las reglas se aplican en este orden:
+
+1. **No aplica**: la obra está finalizada o caducada.
+2. **Sin dato**: la obra no tiene contrato en SECOP.
+3. **Prorrogada**: el contrato ya tiene días adicionados. Esto es un hecho, no una estimación.
+4. **Alto** desde 60 % de probabilidad, **medio** desde 30 % y **bajo** por debajo.
+
+Con los datos actuales, de las 124 obras: 53 prorrogadas, 39 que no aplican, 19 en riesgo alto, 6 en riesgo
+medio, 6 sin dato y 1 en riesgo bajo.
+
+## Dónde quedan los resultados
 
 | Dónde | Qué |
 |---|---|
-| `ml/models/riesgo_prorroga/riesgo_prorroga_<versión>.joblib` | modelo calibrado + modelo explicado |
-| `ml/models/riesgo_prorroga/riesgo_prorroga_<versión>.json` | métricas y variables |
-| `ml_prorroga_metricas` | métricas de cada candidato por versión |
-| `ml_prorroga_contrato` | probabilidad y factores de cada contrato |
-| `ml_riesgo_obra` | nivel, probabilidad, días adicionados y factores de cada obra |
+| `ml_prorroga_metricas` | Métricas de cada candidato en cada versión, y cuál se eligió |
+| `ml_prorroga_contrato` | Probabilidad y factores de cada contrato |
+| `ml_riesgo_obra` | Nivel, probabilidad, días adicionados y factores de cada obra |
+| `ml/models/riesgo_prorroga/` | El modelo entrenado (`.joblib`) y sus métricas (`.json`), uno por versión |
 
-Cada corrida es una versión nueva (`AAAAMMDD-HHMMSS`); el backend usa la última (`v_prorroga_version_activa`).
-El ETL no borra estas tablas. El riesgo por obra queda fijo hasta el siguiente entrenamiento.
+Cada entrenamiento crea una versión nueva (`AAAAMMDD-HHMMSS`) y el backend usa la última
+(`v_prorroga_version_activa`). El riesgo de cada obra no cambia hasta el siguiente entrenamiento, aunque se
+vuelva a correr el ETL. En producción solo se entrena en el primer despliegue o cuando alguien lo pide (ver
+[ml/README.md](../README.md#en-producción)).
+
+## Limitaciones
+
+- Predice prórrogas del contrato, no atrasos físicos de la obra. Son cosas relacionadas pero no iguales: un
+  contrato puede prorrogarse por razones administrativas y una obra puede ir atrasada sin prórroga.
+- Los umbrales de 30 % y 60 % son un punto de partida, no salen de un análisis de costos.
+- Muchas obras comparten contrato, así que todas reciben el mismo riesgo.
+- Los contratistas que llegan por primera vez al IDU no tienen historial, así que sobre ellos el modelo tiene
+  menos información.

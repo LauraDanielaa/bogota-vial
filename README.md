@@ -1,114 +1,127 @@
-# bogota-vial
+# Bogotá Vial
 
-Plataforma de datos para analizar y visualizar las obras viales de Bogotá: ETL de datos abiertos,
-mapa interactivo y modelos de machine learning.
+Bogotá Vial reúne en un solo lugar la información de las obras viales del IDU en Bogotá. Cruzamos el visor
+de proyectos del IDU con los contratos publicados en SECOP II y con las localidades de la ciudad, y lo
+mostramos en una aplicación web con tres vistas:
 
-## Estructura
+- **Mapa**: cada obra es un punto coloreado según su avance físico o su riesgo de atraso, con filtros por
+  localidad, tipo de contrato, estado y avance.
+- **Dashboard**: cómo va el avance frente a lo programado, por año y por localidad, en qué estado están las
+  obras, dónde está el riesgo de atraso y qué contratos se salen de lo común.
+- **Listado**: todas las obras agrupadas por localidad, con la ficha completa de cada una y el enlace a su
+  contrato en SECOP.
+
+Además tiene dos modelos de machine learning: uno estima el riesgo de que el contrato de una obra se prorrogue
+y otro señala los contratos atípicos. Los dos se explican en [ml/README.md](ml/README.md).
+
+## Cómo está organizado
 
 ```
 bogota-vial/
-├── etl/                 pipeline de datos (Python + SQL)
-│   ├── src/extraccion/      descarga de datos (visor IDU, SECOP)
-│   ├── src/transformacion/  preparación de CSV
-│   ├── src/carga/           carga a PostGIS (tablas stg_*)
-│   ├── sql/                 limpieza, cruce, localidades, vistas y calidad
-│   └── run_etl.py           ejecuta cargar -> transformar -> calidad
-├── backend/             API REST (FastAPI) que lee las vistas de PostGIS
-├── frontend/            aplicación web (React + Vite + Leaflet)
-├── ml/                  modelos de machine learning (un subdirectorio por modelo)
-├── data/                datos crudos e intermedios (no se suben a git)
-└── docker-compose.yml
+├── etl/            descarga, limpieza y carga de los datos en PostGIS (Python + SQL)
+├── backend/        API en FastAPI; solo lee las tablas y vistas que deja el ETL
+├── frontend/       aplicación web en React + Vite + Leaflet (gráficos con Plotly)
+├── ml/             modelos de machine learning, uno por carpeta
+├── deploy/         scripts y configuración del servidor de producción
+├── data/           datos crudos e intermedios (no se suben a git)
+├── docker-compose.yml        entorno local
+└── docker-compose.prod.yml   ajustes para producción (HTTPS con Caddy, sin puertos expuestos)
 ```
 
-## Puesta en marcha con Docker
+El flujo es siempre el mismo: el ETL deja tablas limpias y vistas en PostGIS, los modelos leen esas vistas y
+guardan sus resultados en tablas `ml_*`, y el backend solo consulta la base. Nada se recalcula cuando alguien
+abre la página.
+
+## Datos
+
+La carpeta `data/` no está en el repositorio. El ETL espera estos archivos:
+
+| Archivo | Qué es |
+|---|---|
+| `data/interim/obras_idu_final.csv` | Obras del visor del IDU con los datos de su ficha |
+| `data/raw/secop_contratos_idu_completo.csv` | Contratos del IDU en SECOP II |
+| `data/raw/secop_ejecucion_idu.csv` | Ejecución de contratos en SECOP II |
+| `data/raw/datos_abiertos_bogota.csv` | Datos abiertos de Bogotá |
+| `data/geo/localidades.geojson` | Polígonos de las 20 localidades |
+
+Los scripts de `etl/src/extraccion/` descargan los datos del visor del IDU y de datos.gov.co, y
+`etl/src/transformacion/separar_tablas_idu.py` convierte la ficha de cada obra en columnas. Se corren desde la
+raíz del repositorio para que guarden en `data/raw/`.
+
+## Correr el proyecto con Docker
+
+Hace falta Docker con Docker Compose y la carpeta `data/`.
 
 ```bash
-cp .env.example .env          # y editar la clave
-docker compose up -d --build  # base de datos + backend + frontend
-docker compose run --rm etl   # carga los datos de ./data en la base
-docker compose run --rm ml riesgo_prorroga   # entrena el modelo de riesgo de atraso (después del ETL)
-docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos   # contratos atípicos (opcional)
+cp .env.example .env            # cambiar al menos la clave de la base
+docker compose up -d --build    # base de datos, backend y frontend
+docker compose run --rm etl     # carga los datos en la base
 ```
 
-- Frontend: http://localhost:3000
-- API y documentación: http://localhost:8000/docs
-- PostGIS: `localhost:5432`
+Con eso ya se puede abrir:
 
-Para correr solo una etapa del ETL: `docker compose run --rm etl --etapa calidad`.
+- La aplicación en http://localhost:3000
+- La API y su documentación en http://localhost:8000/docs
+- La base en `localhost`, en el puerto `DB_PORT` del `.env` (5433 en el ejemplo)
 
-## Modelo de riesgo de atraso
-
-El riesgo de atraso de cada obra es la probabilidad, estimada con un modelo de machine learning, de que su
-contrato en SECOP II sea prorrogado (tenga días adicionados). Detalle en
-[ml/riesgo_prorroga/README.md](ml/riesgo_prorroga/README.md).
-
-Para entrenarlo (o reentrenarlo cuando lleguen datos nuevos):
+Los modelos no corren con `docker compose up`; se corren a mano después del ETL:
 
 ```bash
-docker compose run --rm etl                    # 1. el ETL crea v_ml_contratos y las tablas ml_*
-docker compose run --rm ml riesgo_prorroga     # 2. entrena, imprime las métricas y guarda los resultados
+docker compose run --rm ml riesgo_prorroga
+docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos
 ```
 
-- El modelo queda en `ml/models/riesgo_prorroga/` y las métricas y predicciones en la base
-  (`ml_prorroga_metricas`, `ml_prorroga_contrato`, `ml_riesgo_obra`). El backend solo lee esas tablas.
-- Volver a correr el ETL **no** borra las predicciones. Si cambian los datos, hay que reentrenar para
-  que el riesgo se recalcule.
-- Mientras el modelo no se haya entrenado, la web muestra el riesgo como "Sin calcular".
-- En producción no hace falta correrlo a mano: el despliegue automático lo calcula la primera vez y
-  después conserva ese riesgo (ver [Despliegue en producción](#despliegue-en-producción)).
+Mientras no se hayan corrido, la web muestra el riesgo como "Sin calcular" y no muestra nada de contratos
+atípicos. Volver a correr el ETL no borra los resultados de los modelos.
 
-## Contratos atípicos
+Si solo se quiere repetir una etapa del ETL: `docker compose run --rm etl --etapa calidad` (también `cargar`
+y `transformar`).
 
-Un segundo modelo, no supervisado (IsolationForest), compara los 913 contratos del IDU en SECOP II por su
-valor, plazo pactado, valor por día de plazo, días adicionados, tipo y modalidad, y señala los que se salen
-de lo habitual, con uno a tres motivos en español. En la web solo aparecen los contratos que tienen obra en
-el mapa: marca "Contrato atípico" en el listado, anillo punteado en el mapa y una fila en el dashboard.
-Que un contrato sea atípico **no** significa que haya una irregularidad. Detalle en
-[ml/atipicos/README.md](ml/atipicos/README.md).
+## Desarrollo sin Docker
 
-- **En producción corre solo, una vez por cada push a `main`** (ver
-  [Despliegue en producción](#despliegue-en-producción)). La web siempre muestra la última ejecución exitosa
-  y no recalcula nada en cada visita.
-- **En local se corre a mano** (no corre con `docker compose up` ni en los pull requests):
-
-  ```bash
-  docker compose run --rm etl
-  docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos
-  ```
-
-  Si ese commit ya tiene una ejecución exitosa, termina sin hacer nada. Sin `COMMIT_GIT` corre siempre.
-- Resultados en la base: `ml_atipicos_ejecucion` (una fila por ejecución, con commit, conteos, estabilidad,
-  parámetros y validación) y `ml_atipicos_contrato` (resultado de cada contrato). No se guarda el modelo.
-
-## Desarrollo local (sin Docker para la app)
+Solo la base va en Docker; el resto corre en la máquina (Python 3.12 y Node 20):
 
 ```bash
 docker compose up -d db
 
-# ETL
 pip install -r etl/requirements.txt
 python etl/run_etl.py
 
-# Backend
+pip install -r ml/requirements.txt
+python ml/run_ml.py riesgo_prorroga
+python ml/run_ml.py atipicos
+
 pip install -r backend/requirements.txt
 cd backend && uvicorn app.main:app --reload
 
-# Modelos de ML (Python 3.12, después del ETL)
-pip install -r ml/requirements.txt
-python ml/run_ml.py riesgo_prorroga
-python ml/run_ml.py atipicos        # toma el commit con git
-
-# Frontend (en otra terminal)
-cd frontend && npm install && npm run dev   # http://localhost:5173
+cd frontend && npm install && npm run dev     # http://localhost:5173
 ```
 
-Los scripts de descarga (`etl/src/extraccion/`) se ejecutan desde la raíz del repo, para que
-guarden en `data/raw/`.
+Los scripts leen la conexión del `.env` de la raíz. En desarrollo, Vite reenvía `/api` al backend.
 
-## Despliegue en producción
+## El ETL
 
-En el servidor (Ubuntu 24.04, p. ej. AWS EC2 `t3.small`) la app corre con Docker detrás de
-[Caddy](https://caddyserver.com), que se encarga del HTTPS. La base y el backend no tienen puertos públicos.
+`etl/run_etl.py` corre tres etapas: carga los CSV y el GeoJSON en tablas `stg_*` (todo como texto), ejecuta
+los archivos SQL en orden y al final imprime un reporte de calidad.
+
+| Archivo | Qué hace |
+|---|---|
+| `01_limpieza.sql` | Pasa las tablas `stg_*` a tablas `clean_*` con tipos reales. Deja 124 obras y 913 contratos (se excluye la prestación de servicios) |
+| `02_cruce.sql` | Une cada obra con su contrato de SECOP por número de contrato y completa lo que le falta al visor |
+| `03_localidad.sql` | Asigna la localidad de cada obra según sus coordenadas |
+| `04_vistas.sql` | Vistas para el mapa y las localidades |
+| `05_indicadores.sql` | Estado de seguimiento de cada obra (una obra en ejecución está retrasada si va 10 puntos o más por debajo de lo programado) y los indicadores de la página principal |
+| `06_ml.sql` | Insumos y tablas de resultados de los modelos |
+| `99_calidad.sql` | Reporte de calidad: conteos, cruces que no se lograron y datos faltantes |
+
+El ETL se puede correr las veces que se quiera: borra y recrea sus propias tablas, pero nunca toca las tablas
+`ml_*`.
+
+## Despliegue
+
+En producción todo corre con Docker en un servidor Ubuntu 24.04 (por ejemplo una instancia `t3.small` de AWS),
+detrás de [Caddy](https://caddyserver.com), que se encarga del certificado HTTPS. Ni la base ni el backend
+quedan expuestos a internet:
 
 ```
 Internet ─HTTPS→ Caddy (80/443) → frontend (nginx, /api) → backend (FastAPI) → db (PostGIS)
@@ -116,67 +129,63 @@ Internet ─HTTPS→ Caddy (80/443) → frontend (nginx, /api) → backend (Fast
 
 | Archivo | Para qué sirve |
 |---|---|
-| `docker-compose.prod.yml` | Se suma al compose normal: cierra puertos y agrega Caddy |
-| `deploy/Caddyfile` | HTTPS automático para `DOMINIO` (y `www.` redirige) |
-| `deploy/setup-servidor.sh` | Prepara el servidor: Docker, swap, llaves, clon del repo, backups |
-| `deploy/backup.sh` | Respaldo diario de la base (`pg_dump`), guarda los últimos 7 |
-| `deploy/calcular-riesgo.sh` | Corre ETL + modelo de riesgo solo si la base aún no tiene un modelo entrenado |
-| `deploy/calcular-atipicos.sh` | Corre ETL + modelo de contratos atípicos una vez por commit |
-| `.github/workflows/deploy.yml` | En cada push a `main`: verifica y, si está activo, despliega por SSH |
+| `docker-compose.prod.yml` | Se suma al compose normal: cierra los puertos y agrega Caddy |
+| `deploy/Caddyfile` | HTTPS para el dominio de `DOMINIO`; `www.` redirige al dominio |
+| `deploy/setup-servidor.sh` | Prepara el servidor: Docker, swap, llaves, clon del repositorio y copias de seguridad |
+| `deploy/backup.sh` | Copia de seguridad diaria de la base con `pg_dump`; guarda las últimas 7 |
+| `deploy/actualizar-modelos.sh` | Corre el ETL y los modelos que necesiten actualizarse |
+| `.github/workflows/deploy.yml` | Verifica el proyecto en cada push o pull request y despliega los push a `main` |
 
-Primer despliegue (en el servidor):
+### Primera vez
 
 ```bash
-bash setup-servidor.sh                 # una vez; imprime las llaves que hay que copiar a GitHub
-cd /opt/bogota-vial && nano .env       # ver .env.example (clave fuerte, DOMINIO, MAPBOX_API_KEY)
-# desde tu PC: scp -r data ubuntu@IP:/opt/bogota-vial/
+bash setup-servidor.sh                   # una sola vez; al final imprime las llaves para GitHub
+cd /opt/bogota-vial && nano .env         # ver .env.example: clave fuerte, DOMINIO y MAPBOX_API_KEY
+# desde tu computador: scp -r data ubuntu@IP:/opt/bogota-vial/
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm etl
+bash deploy/actualizar-modelos.sh        # ETL y modelos, sin esperar al primer push
 ```
 
-Despliegue automático: en GitHub → Settings → Secrets and variables → Actions, crear los secrets
-`VPS_HOST`, `VPS_USER` y `VPS_SSH_KEY`, y la variable `DESPLIEGUE_ACTIVO=true`. Desde ahí, cada push a
-`main` se publica solo (pestaña **Actions** para ver el resultado).
+Para activar el despliegue automático, en GitHub → Settings → Secrets and variables → Actions se crean los
+secrets `VPS_HOST`, `VPS_USER` y `VPS_SSH_KEY` y la variable `DESPLIEGUE_ACTIVO=true`.
 
-Riesgo de atraso en producción: después de levantar los contenedores, el despliegue corre
-`deploy/calcular-riesgo.sh`.
+### Qué pasa en cada push a `main`
 
-- **Primer despliegue** (la base no tiene modelo): corre el ETL y entrena el modelo. La primera vez tarda
-  unos minutos más, porque construye la imagen de ML.
-- **Despliegues siguientes**: no vuelve a entrenar; se conserva el riesgo ya calculado.
-- **Para recalcularlo** (p. ej. después de copiar datos nuevos a `data/`): GitHub → **Actions** →
-  *Verificar y desplegar* → **Run workflow** → marcar *Volver a calcular el riesgo de atraso*.
-  En el servidor también se puede: `bash deploy/calcular-riesgo.sh --forzar`.
+El workflow *Verificar y desplegar* tiene dos trabajos. El primero corre también en los pull requests:
+compila el frontend, revisa la sintaxis de todo el código Python y de los scripts de `deploy/`, y valida el
+compose de producción. El segundo solo corre en los push a `main` y entra al servidor por SSH:
 
-Contratos atípicos en producción: en el job de despliegue, después de levantar los contenedores, de verificar
-que la API responda y del paso del riesgo, el paso **Contratos atípicos** corre
-`deploy/calcular-atipicos.sh <commit del push>`:
+1. Baja el código, reconstruye los contenedores y espera a que la API responda. Si la API no responde, el
+   despliegue falla.
+2. Corre `deploy/actualizar-modelos.sh` con el commit del push. Cada modelo decide si le toca: el de riesgo
+   de atraso solo se entrena si la base todavía no tiene uno, y el de contratos atípicos corre una vez por
+   commit. Si a alguno le toca, se corre el ETL una vez y después esos modelos; si a ninguno, no se hace nada.
+   Por eso volver a lanzar el workflow sobre el mismo commit no repite trabajo.
+3. Si ese paso falla, el sitio sigue en línea con los resultados que ya tenía, y el workflow termina con una
+   advertencia en el resumen del run.
 
-1. Si ya hay una ejecución exitosa para ese commit (p. ej. alguien volvió a lanzar el workflow), no hace nada.
-2. Si no, corre el ETL y luego el modelo, que escribe todo en **una sola transacción**.
-3. Si el modelo falla, no queda nada a medias: la web sigue con la ejecución anterior. El paso tiene
-   `continue-on-error`, así que el despliegue no se cae, y el workflow muestra una **advertencia** visible
-   (anotación y resumen del run).
+Para volver a entrenar el riesgo de atraso (por ejemplo, después de copiar datos nuevos al servidor):
+Actions → *Verificar y desplegar* → **Run workflow** → marcar *Volver a entrenar los modelos que se conservan
+entre despliegues*. En el servidor da lo mismo correr `bash deploy/actualizar-modelos.sh --recalcular`.
 
-Ese paso no existe en los pull requests: el job de despliegue solo corre en `main`. El job de verificación
-revisa la sintaxis de la carpeta `ml` y de los scripts de `deploy/`.
+## API
 
-## Endpoints principales
+| Ruta | Qué devuelve |
+|---|---|
+| `GET /api/health` | Estado de la API y de la conexión a la base |
+| `GET /api/obras` | Obras, con filtros `localidad` y `estado` |
+| `GET /api/obras/geojson` | Obras como GeoJSON de puntos |
+| `GET /api/obras/mapa` | Obras con estado de seguimiento, riesgo de atraso y si su contrato es atípico; la usan el mapa y el listado |
+| `GET /api/obras/indicadores` | Totales de la página principal (`?localidad=08`) |
+| `GET /api/obras/estados` | Estados de contrato y cuántas obras hay en cada uno |
+| `GET /api/obras/{objectid}` | Detalle de una obra |
+| `GET /api/obras/{objectid}/riesgo` | Riesgo de atraso de una obra y los tres factores que más pesan |
+| `GET /api/localidades` | Indicadores por localidad |
+| `GET /api/localidades/geojson` | Polígonos de las localidades con sus indicadores |
+| `GET /api/dashboard` | Indicadores y gráficos del dashboard (acepta `localidad`, `tipo` y `periodo`) |
+| `GET /api/modelo/metricas` | Métricas del modelo de riesgo activo |
+| `GET /api/atipicos/ejecucion` | Última ejecución del modelo de contratos atípicos: fecha, contratos, atípicos y estabilidad |
+| `GET /api/atipicos/dispersion` | Valor contra plazo pactado de los 913 contratos, para el gráfico del dashboard |
+| `GET /api/calidad` | Reporte de calidad del ETL |
 
-| Método | Ruta                       | Descripción                                      |
-|--------|----------------------------|--------------------------------------------------|
-| GET    | `/api/health`              | Estado de la API y la conexión a la base         |
-| GET    | `/api/obras`               | Lista de obras (filtros `localidad`, `estado`)   |
-| GET    | `/api/obras/geojson`       | Obras como GeoJSON de puntos                     |
-| GET    | `/api/obras/estados`       | Estados de contrato y su conteo                  |
-| GET    | `/api/obras/{objectid}`    | Detalle de una obra                              |
-| GET    | `/api/localidades`         | Indicadores por localidad                        |
-| GET    | `/api/localidades/geojson` | Polígonos de localidades con indicadores         |
-| GET    | `/api/calidad`             | Reporte de calidad del ETL                       |
-| GET    | `/api/obras/mapa`          | Obras con estado de seguimiento, riesgo de atraso y si su contrato es atípico (mapa y listado) |
-| GET    | `/api/obras/{objectid}/riesgo` | Riesgo de atraso de una obra, con sus tres factores |
-| GET    | `/api/modelo/metricas`     | Métricas del modelo de riesgo activo             |
-| GET    | `/api/obras/indicadores`   | Totales de la página principal (`?localidad=08`) |
-| GET    | `/api/dashboard`           | Indicadores y gráficos Plotly del dashboard (incluye riesgo por localidad) |
-| GET    | `/api/atipicos/ejecucion`  | Última ejecución del modelo de atípicos: fecha, contratos, atípicos y estabilidad |
-| GET    | `/api/atipicos/dispersion` | Valor contra plazo pactado de los 913 contratos (puntos y figura Plotly) |
+La documentación interactiva completa está en `/docs`.
