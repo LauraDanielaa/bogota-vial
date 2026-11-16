@@ -27,6 +27,7 @@ cp .env.example .env          # y editar la clave
 docker compose up -d --build  # base de datos + backend + frontend
 docker compose run --rm etl   # carga los datos de ./data en la base
 docker compose run --rm ml riesgo_prorroga   # entrena el modelo de riesgo de atraso (después del ETL)
+docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos   # contratos atípicos (opcional)
 ```
 
 - Frontend: http://localhost:3000
@@ -56,6 +57,29 @@ docker compose run --rm ml riesgo_prorroga     # 2. entrena, imprime las métric
 - En producción no hace falta correrlo a mano: el despliegue automático lo calcula la primera vez y
   después conserva ese riesgo (ver [Despliegue en producción](#despliegue-en-producción)).
 
+## Contratos atípicos
+
+Un segundo modelo, no supervisado (IsolationForest), compara los 913 contratos del IDU en SECOP II por su
+valor, plazo pactado, valor por día de plazo, días adicionados, tipo y modalidad, y señala los que se salen
+de lo habitual, con uno a tres motivos en español. En la web solo aparecen los contratos que tienen obra en
+el mapa: marca "Contrato atípico" en el listado, anillo punteado en el mapa y una fila en el dashboard.
+Que un contrato sea atípico **no** significa que haya una irregularidad. Detalle en
+[ml/atipicos/README.md](ml/atipicos/README.md).
+
+- **En producción corre solo, una vez por cada push a `main`** (ver
+  [Despliegue en producción](#despliegue-en-producción)). La web siempre muestra la última ejecución exitosa
+  y no recalcula nada en cada visita.
+- **En local se corre a mano** (no corre con `docker compose up` ni en los pull requests):
+
+  ```bash
+  docker compose run --rm etl
+  docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos
+  ```
+
+  Si ese commit ya tiene una ejecución exitosa, termina sin hacer nada. Sin `COMMIT_GIT` corre siempre.
+- Resultados en la base: `ml_atipicos_ejecucion` (una fila por ejecución, con commit, conteos, estabilidad,
+  parámetros y validación) y `ml_atipicos_contrato` (resultado de cada contrato). No se guarda el modelo.
+
 ## Desarrollo local (sin Docker para la app)
 
 ```bash
@@ -69,9 +93,10 @@ python etl/run_etl.py
 pip install -r backend/requirements.txt
 cd backend && uvicorn app.main:app --reload
 
-# Modelo de riesgo (Python 3.12, después del ETL)
+# Modelos de ML (Python 3.12, después del ETL)
 pip install -r ml/requirements.txt
 python ml/run_ml.py riesgo_prorroga
+python ml/run_ml.py atipicos        # toma el commit con git
 
 # Frontend (en otra terminal)
 cd frontend && npm install && npm run dev   # http://localhost:5173
@@ -96,6 +121,7 @@ Internet ─HTTPS→ Caddy (80/443) → frontend (nginx, /api) → backend (Fast
 | `deploy/setup-servidor.sh` | Prepara el servidor: Docker, swap, llaves, clon del repo, backups |
 | `deploy/backup.sh` | Respaldo diario de la base (`pg_dump`), guarda los últimos 7 |
 | `deploy/calcular-riesgo.sh` | Corre ETL + modelo de riesgo solo si la base aún no tiene un modelo entrenado |
+| `deploy/calcular-atipicos.sh` | Corre ETL + modelo de contratos atípicos una vez por commit |
 | `.github/workflows/deploy.yml` | En cada push a `main`: verifica y, si está activo, despliega por SSH |
 
 Primer despliegue (en el servidor):
@@ -122,6 +148,19 @@ Riesgo de atraso en producción: después de levantar los contenedores, el despl
   *Verificar y desplegar* → **Run workflow** → marcar *Volver a calcular el riesgo de atraso*.
   En el servidor también se puede: `bash deploy/calcular-riesgo.sh --forzar`.
 
+Contratos atípicos en producción: en el job de despliegue, después de levantar los contenedores, de verificar
+que la API responda y del paso del riesgo, el paso **Contratos atípicos** corre
+`deploy/calcular-atipicos.sh <commit del push>`:
+
+1. Si ya hay una ejecución exitosa para ese commit (p. ej. alguien volvió a lanzar el workflow), no hace nada.
+2. Si no, corre el ETL y luego el modelo, que escribe todo en **una sola transacción**.
+3. Si el modelo falla, no queda nada a medias: la web sigue con la ejecución anterior. El paso tiene
+   `continue-on-error`, así que el despliegue no se cae, y el workflow muestra una **advertencia** visible
+   (anotación y resumen del run).
+
+Ese paso no existe en los pull requests: el job de despliegue solo corre en `main`. El job de verificación
+revisa la sintaxis de la carpeta `ml` y de los scripts de `deploy/`.
+
 ## Endpoints principales
 
 | Método | Ruta                       | Descripción                                      |
@@ -134,8 +173,10 @@ Riesgo de atraso en producción: después de levantar los contenedores, el despl
 | GET    | `/api/localidades`         | Indicadores por localidad                        |
 | GET    | `/api/localidades/geojson` | Polígonos de localidades con indicadores         |
 | GET    | `/api/calidad`             | Reporte de calidad del ETL                       |
-| GET    | `/api/obras/mapa`          | Obras con estado de seguimiento y riesgo de atraso (mapa y listado) |
+| GET    | `/api/obras/mapa`          | Obras con estado de seguimiento, riesgo de atraso y si su contrato es atípico (mapa y listado) |
 | GET    | `/api/obras/{objectid}/riesgo` | Riesgo de atraso de una obra, con sus tres factores |
 | GET    | `/api/modelo/metricas`     | Métricas del modelo de riesgo activo             |
 | GET    | `/api/obras/indicadores`   | Totales de la página principal (`?localidad=08`) |
 | GET    | `/api/dashboard`           | Indicadores y gráficos Plotly del dashboard (incluye riesgo por localidad) |
+| GET    | `/api/atipicos/ejecucion`  | Última ejecución del modelo de atípicos: fecha, contratos, atípicos y estabilidad |
+| GET    | `/api/atipicos/dispersion` | Valor contra plazo pactado de los 913 contratos (puntos y figura Plotly) |

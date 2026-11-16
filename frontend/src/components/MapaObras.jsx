@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import L from "leaflet";
 import {
   CircleMarker,
@@ -118,6 +118,9 @@ function Controles({ base, onBase, contorno }) {
   );
 }
 
+// Anillo punteado oscuro alrededor de las obras con contrato atípico (no cambia el color del punto)
+const ESTILO_ANILLO = { color: "#2b211b", weight: 1.6, dashArray: "2 3", fill: false };
+
 const pctTexto = (v) => (v === null || v === undefined ? "sin dato" : `${Math.round(v)} %`);
 
 /** verPor: "avance" (color por avance físico) o "riesgo" (color por riesgo de atraso). */
@@ -126,7 +129,8 @@ export default function MapaObras({ obras, seleccionadaId, onSeleccionar, contor
   const seleccionada = obras.find((o) => o.id === seleccionadaId);
   const color = (o) => (verPor === "riesgo" ? colorRiesgo(o.riesgo) : colorAvance(o.avance));
   const etiqueta = (o) =>
-    `${o.corto} · ${verPor === "riesgo" ? textoRiesgo(o.riesgo, o.probRiesgo, o.diasAdicionados) : pctTexto(o.avance)}`;
+    `${o.corto} · ${verPor === "riesgo" ? textoRiesgo(o.riesgo, o.probRiesgo, o.diasAdicionados) : pctTexto(o.avance)}` +
+    (o.atipico ? " · Contrato atípico" : "");
 
   const clicObra = (id) => (e) => {
     L.DomEvent.stopPropagation(e);
@@ -149,17 +153,21 @@ export default function MapaObras({ obras, seleccionadaId, onSeleccionar, contor
 
         {obras.map((o) =>
           o.id === seleccionadaId ? null : (
-            <CircleMarker
-              key={o.id}
-              center={[o.lat, o.lon]}
-              radius={8}
-              pathOptions={{ color: "#fff", weight: 2, fillColor: color(o), fillOpacity: 0.95 }}
-              eventHandlers={{ click: clicObra(o.id) }}
-            >
-              <Tooltip direction="top" offset={[0, -8]}>
-                {etiqueta(o)}
-              </Tooltip>
-            </CircleMarker>
+            <Fragment key={o.id}>
+              {o.atipico && (
+                <CircleMarker center={[o.lat, o.lon]} radius={12.5} interactive={false} pathOptions={ESTILO_ANILLO} />
+              )}
+              <CircleMarker
+                center={[o.lat, o.lon]}
+                radius={8}
+                pathOptions={{ color: "#fff", weight: 2, fillColor: color(o), fillOpacity: 0.95 }}
+                eventHandlers={{ click: clicObra(o.id) }}
+              >
+                <Tooltip direction="top" offset={[0, -8]}>
+                  {etiqueta(o)}
+                </Tooltip>
+              </CircleMarker>
+            </Fragment>
           )
         )}
 
@@ -171,6 +179,14 @@ export default function MapaObras({ obras, seleccionadaId, onSeleccionar, contor
               interactive={false}
               pathOptions={{ stroke: false, fillColor: color(seleccionada), fillOpacity: 0.28 }}
             />
+            {seleccionada.atipico && (
+              <CircleMarker
+                center={[seleccionada.lat, seleccionada.lon]}
+                radius={16}
+                interactive={false}
+                pathOptions={{ ...ESTILO_ANILLO, weight: 2 }}
+              />
+            )}
             <CircleMarker
               key={`sel-${seleccionada.id}`}
               center={[seleccionada.lat, seleccionada.lon]}

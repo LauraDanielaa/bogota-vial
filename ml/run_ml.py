@@ -8,10 +8,12 @@ Se corre DESPUÉS del ETL, porque lee las vistas que este deja en PostGIS.
 Uso (desde la raíz del repo):
     python ml/run_ml.py                    # todos los modelos
     python ml/run_ml.py riesgo_prorroga    # solo uno
+    python ml/run_ml.py atipicos           # contratos atípicos
 
 Con Docker:
     docker compose run --rm etl                    # primero el ETL
     docker compose run --rm ml riesgo_prorroga     # luego el modelo
+    docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos
 
 La conexión se lee de .env (DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD).
 """
@@ -27,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 # nombre -> módulo con la función main()
 MODELOS = {
     "riesgo_prorroga": "riesgo_prorroga.entrenar",
+    "atipicos": "atipicos.ejecutar",     # contratos atípicos (corre solo en cada push a main)
 }
 
 

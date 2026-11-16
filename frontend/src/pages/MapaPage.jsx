@@ -27,6 +27,7 @@ const FILTROS_INICIALES = {
   max: 100,
   estados: [...ESTADOS_SEGUIMIENTO],
   riesgos: [...NIVELES_RIESGO],
+  soloAtipicos: false,
 };
 
 /* ---------------- datos ---------------- */
@@ -41,6 +42,7 @@ function filtrar(obras, f) {
     // Las obras sin dato de avance solo se muestran con el rango completo (0–100 %)
     if (o.avance === null ? !rangoCompleto : o.avance < f.min || o.avance > f.max) return false;
     if (!f.riesgos.includes(o.riesgo)) return false;
+    if (f.soloAtipicos && !o.atipico) return false;
     return f.estados.includes(o.estado);
   });
 }
@@ -64,6 +66,22 @@ function avancePorLocalidad(obras) {
     .sort((a, b) => (b.avance ?? -1) - (a.avance ?? -1) || a.nombre.localeCompare(b.nombre));
 }
 
+/** Línea de la leyenda para el anillo punteado de las obras con contrato atípico. */
+function LeyendaAtipico({ n }) {
+  if (!n) return null;
+  return (
+    <div className="legend-bin">
+      <span className="legend-ring" />
+      <div>
+        <strong>Contrato atípico</strong>
+        <span>
+          {n} {n === 1 ? "obra" : "obras"}
+        </span>
+      </div>
+    </div>
+  );
+}
+
 /* ---------------- panel de filtros (columna izquierda) ---------------- */
 function PanelFiltros({
   filtros,
@@ -72,6 +90,7 @@ function PanelFiltros({
   tipos,
   conteoEstado,
   conteoRiesgo,
+  nAtipicos,
   verPor,
   total,
   filtradas,
@@ -174,6 +193,22 @@ function PanelFiltros({
           </label>
         ))}
       </div>
+
+      {nAtipicos > 0 && (
+        <div className="campo">
+          <span className="campo-label">Contrato</span>
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={filtros.soloAtipicos}
+              onChange={() => set("soloAtipicos")(!filtros.soloAtipicos)}
+            />
+            <span className="legend-ring" />
+            <span>Solo obras con contrato atípico</span>
+            <span className="check-count">{nAtipicos}</span>
+          </label>
+        </div>
+      )}
 
       <div className="nota-box">
         <Icon name="info" size={18} />
@@ -319,6 +354,8 @@ export default function MapaPage() {
     todas.forEach((o) => (c[o.riesgo] = (c[o.riesgo] || 0) + 1));
     return c;
   }, [todas]);
+  // Obras con contrato atípico (0 si el modelo de atípicos aún no se ha ejecutado: no se muestra nada)
+  const nAtipicos = useMemo(() => todas.filter((o) => o.atipico).length, [todas]);
   const opcionesLocalidad = useMemo(
     () =>
       (localidadesGeo?.features ?? [])
@@ -336,6 +373,7 @@ export default function MapaPage() {
 
   const conteoRangos = RANGOS.map((r) => obras.filter((o) => o.avance !== null && rangoDe(o.avance) === r).length);
   const sinAvance = obras.filter((o) => o.avance === null).length;
+  const atipicosVisibles = obras.filter((o) => o.atipico).length;
   const riesgoVisibles = NIVELES_RIESGO.map((n) => ({ nivel: n, n: obras.filter((o) => o.riesgo === n).length })).filter(
     (r) => r.n > 0
   );
@@ -375,6 +413,7 @@ export default function MapaPage() {
           tipos={tipos}
           conteoEstado={conteoEstado}
           conteoRiesgo={conteoRiesgo}
+          nAtipicos={nAtipicos}
           verPor={verPor}
           total={todas.length}
           filtradas={obras.length}
@@ -439,6 +478,7 @@ export default function MapaPage() {
                     </div>
                   </div>
                 ))}
+                <LeyendaAtipico n={atipicosVisibles} />
               </div>
             </div>
           ) : (
@@ -466,6 +506,7 @@ export default function MapaPage() {
                   </div>
                 </div>
               )}
+              <LeyendaAtipico n={atipicosVisibles} />
             </div>
           </div>
           )}

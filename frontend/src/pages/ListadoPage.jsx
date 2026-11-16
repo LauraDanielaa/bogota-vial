@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Icon from "../components/Icon.jsx";
-import { EstadoBadge, Progress, RiesgoBadge, SearchInput, Select } from "../components/ui.jsx";
+import { AtipicoTag, EstadoBadge, Progress, RiesgoBadge, SearchInput, Select } from "../components/ui.jsx";
 import { adaptarObra, fecha, SIN_TIPO, textoBrecha } from "../data/obras.js";
 import { api } from "../services/api.js";
 import {
@@ -19,7 +19,7 @@ import { formatoPesos, pct } from "../utils/formato.js";
 // "Avance físico" = avance_ejecutado.
 
 const PORTAL_SECOP = "https://www.colombiacompra.gov.co/secop";
-const VACIO = { texto: "", localidad: "", tipo: "", estado: "", riesgo: "", avance: "" };
+const VACIO = { texto: "", localidad: "", tipo: "", estado: "", riesgo: "", avance: "", atipico: false };
 const SIN_AVANCE = "sin";
 
 // Orden de la tabla. Solo "Localidad" agrupa las filas por localidad.
@@ -71,6 +71,7 @@ function filtrar(obras, f, orden) {
         (!f.tipo || o.tipo === f.tipo) &&
         (!f.estado || o.estado === f.estado) &&
         (!f.riesgo || o.riesgo === f.riesgo) &&
+        (!f.atipico || o.atipico) &&
         cumpleAvance(o, f.avance)
     )
     .sort(COMPARAR[orden]);
@@ -152,7 +153,35 @@ function RiesgoObra({ obra }) {
   );
 }
 
-function ConsultaObra({ obra, enlaceManual, onVincular, onCerrar, urlRef }) {
+/** Contrato atípico (modelo ml/atipicos): motivos, enlace a SECOP y nota. Solo si la obra lo tiene. */
+function ContratoAtipico({ obra, urlSecop, nContratos }) {
+  return (
+    <div className="atipico-seccion">
+      <div className="riesgo-seccion-head">
+        <span className="muted xsmall">Contrato fuera de lo común</span>
+        <AtipicoTag motivos={obra.motivosAtipico} />
+      </div>
+      {obra.motivosAtipico.length > 0 && (
+        <ul className="atipico-motivos">
+          {obra.motivosAtipico.map((m) => (
+            <li key={m}>{m}</li>
+          ))}
+        </ul>
+      )}
+      {urlSecop && (
+        <a className="link-btn link-arrow" href={urlSecop} target="_blank" rel="noreferrer">
+          Ver contrato en SECOP <Icon name="arrowUpRight" size={14} />
+        </a>
+      )}
+      <p className="riesgo-nota">
+        Este contrato se sale de lo habitual frente a {nContratos ?? 913} contratos del IDU en SECOP II. Que sea
+        atípico no significa que haya una irregularidad; puede deberse al tamaño o la complejidad de la obra.
+      </p>
+    </div>
+  );
+}
+
+function ConsultaObra({ obra, enlaceManual, onVincular, onCerrar, urlRef, nContratos }) {
   const [urlBorrador, setUrlBorrador] = useState("");
   useEffect(() => setUrlBorrador(""), [obra.id]);
   const urlValida = /^https?:\/\/\S+\.\S+/.test(urlBorrador.trim());
@@ -197,6 +226,13 @@ function ConsultaObra({ obra, enlaceManual, onVincular, onCerrar, urlRef }) {
 
         <hr />
         <RiesgoObra obra={obra} />
+
+        {obra.atipico && (
+          <>
+            <hr />
+            <ContratoAtipico obra={obra} urlSecop={urlSecop} nContratos={nContratos} />
+          </>
+        )}
 
         <hr />
         <span className="muted xsmall">Referencia contractual</span>
@@ -285,8 +321,13 @@ export default function ListadoPage({ enlaces, onVincular }) {
   const [porPagina, setPorPagina] = useState(9);
   const [seleccionadaId, setSeleccionadaId] = useState(null);
   const urlRef = useRef(null);
+  const [ejecucionAtipicos, setEjecucionAtipicos] = useState(null);
 
   useEffect(() => {
+    api
+      .atipicosEjecucion()
+      .then(setEjecucionAtipicos)
+      .catch(() => setEjecucionAtipicos(null));
     api
       .obrasMapa()
       .then((filas) => setTodas(filas.map(adaptarObra)))
@@ -343,6 +384,8 @@ export default function ListadoPage({ enlaces, onVincular }) {
   const visibles = obras.slice((paginaSegura - 1) * porPagina, paginaSegura * porPagina);
   const seleccionada = todas.find((o) => o.id === seleccionadaId) ?? null;
   const conFiltros = JSON.stringify(filtros) !== JSON.stringify(VACIO);
+  // Sin ejecución del modelo de atípicos no se muestra nada de atípicos
+  const hayAtipicos = todas.some((o) => o.atipico);
 
   const aplicar = () => {
     setFiltros(borrador);
@@ -454,6 +497,14 @@ export default function ListadoPage({ enlaces, onVincular }) {
         <button type="button" className="link-btn btn-tall" onClick={limpiar}>
           Limpiar
         </button>
+        {hayAtipicos && (
+          <label className="check listado-check">
+            <input type="checkbox" checked={borrador.atipico} onChange={(e) => set("atipico")(e.target.checked)} />
+            <Icon name="atipico" size={14} strokeWidth={2} className="atipico-icono" />
+            <span>Solo obras con contrato atípico</span>
+            <span className="muted xsmall">({todas.filter((o) => o.atipico).length})</span>
+          </label>
+        )}
       </section>
 
       <div className="listado-grid">
@@ -524,7 +575,10 @@ export default function ListadoPage({ enlaces, onVincular }) {
                         onClick={() => setSeleccionadaId(o.id)}
                       >
                         <td>
-                          <div className="obra-nombre">{o.nombre}</div>
+                          <div className="obra-nombre">
+                            {o.nombre}
+                            {o.atipico && <AtipicoTag motivos={o.motivosAtipico} />}
+                          </div>
                           <div className="obra-ref">
                             {[agrupar ? null : o.localidad, o.etapa, o.contrato].filter(Boolean).join(" · ")}
                           </div>
@@ -637,6 +691,7 @@ export default function ListadoPage({ enlaces, onVincular }) {
               onVincular={onVincular}
               onCerrar={() => setSeleccionadaId(null)}
               urlRef={urlRef}
+              nContratos={ejecucionAtipicos?.ejecutado ? ejecucionAtipicos.n_contratos : undefined}
             />
           ) : (
             <section className="card consulta-card consulta-vacia">

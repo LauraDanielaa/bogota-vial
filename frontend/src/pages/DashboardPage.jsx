@@ -49,18 +49,84 @@ function ComoSeCalcula({ metricas }) {
   );
 }
 
+/** "2026-11-16T01:55:51..." -> "16 de noviembre de 2026" */
+const fechaLarga = (iso) =>
+  iso ? new Date(iso).toLocaleDateString("es-CO", { day: "numeric", month: "long", year: "numeric" }) : "sin dato";
+
+/** Fila de contratos atípicos (modelo ml/atipicos). No depende de los filtros: compara los
+ *  contratos del IDU entre sí. Si el modelo aún no se ha ejecutado, no se muestra. */
+function FilaAtipicos({ ejecucion, dispersion }) {
+  return (
+    <div className="dash-row dash-row-riesgo">
+      <section className="card chart-card">
+        <div className="chart-card-head">
+          <div>
+            <h2>¿Qué contratos se salen de lo común?</h2>
+            <p className="chart-sub">
+              Valor contra plazo pactado de los {numero(ejecucion.n_contratos)} contratos del IDU en SECOP II, en
+              escala logarítmica. Los rombos tienen obra en el mapa.
+            </p>
+          </div>
+        </div>
+        {dispersion && (
+          <PlotlyChart figura={dispersion.figura} vacio="No hay contratos con valor y plazo pactado para dibujar." />
+        )}
+        {dispersion?.n_sin_dibujar > 0 && (
+          <p className="muted xsmall">
+            {numero(dispersion.n_sin_dibujar)} contratos sin plazo pactado o sin valor en SECOP no aparecen en el
+            gráfico.
+          </p>
+        )}
+        {dispersion?.insight && <Insight icon="info">{dispersion.insight}</Insight>}
+      </section>
+
+      <div className="riesgo-side">
+        <section className="card riesgo-kpi">
+          <span className="kpi-titulo">Obras con contrato atípico</span>
+          <span className="riesgo-kpi-valor">{numero(ejecucion.n_obras_con_contrato_atipico)}</span>
+          <span className="kpi-sub">Frente a {numero(ejecucion.n_contratos)} contratos del IDU</span>
+          <span className="muted xsmall">Última ejecución: {fechaLarga(ejecucion.ejecutado_en)}</span>
+        </section>
+        <section className="card riesgo-explica">
+          <h3>¿Qué es un contrato atípico?</h3>
+          <p>
+            Un modelo estadístico compara cada contrato con los demás contratos del IDU por su valor, plazo pactado,
+            valor por día, días adicionados, tipo y modalidad, y señala los que se salen de lo habitual. Para cada
+            uno explica en qué se diferencia de los contratos de su mismo tipo y modalidad.
+          </p>
+          <p className="muted xsmall">
+            Que un contrato sea atípico no significa que haya una irregularidad; puede deberse al tamaño o la
+            complejidad de la obra.
+          </p>
+        </section>
+      </div>
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const [filtros, setFiltros] = useState(FILTROS_INICIALES);
   const [datos, setDatos] = useState(null);
   const [cargando, setCargando] = useState(true);
   const [error, setError] = useState(null);
   const [metricas, setMetricas] = useState(null);
+  const [atipicos, setAtipicos] = useState(null); // { ejecucion, dispersion } o null si no hay ejecución
 
   useEffect(() => {
     api
       .modeloMetricas()
       .then(setMetricas)
       .catch(() => setMetricas(null));
+    api
+      .atipicosEjecucion()
+      .then((ejecucion) => {
+        if (!ejecucion?.ejecutado) return;
+        setAtipicos({ ejecucion, dispersion: null });
+        return api.atipicosDispersion().then((d) => d?.ejecutado && setAtipicos({ ejecucion, dispersion: d }));
+      })
+      .catch(() => {
+        /* sin datos de atípicos: la fila no se muestra */
+      });
   }, []);
 
   useEffect(() => {
@@ -265,6 +331,8 @@ export default function DashboardPage() {
           <ComoSeCalcula metricas={metricas} />
         </div>
       </div>
+
+      {atipicos && <FilaAtipicos ejecucion={atipicos.ejecucion} dispersion={atipicos.dispersion} />}
     </div>
   );
 }

@@ -62,6 +62,16 @@ export function RiesgoBadge({ nivel, probabilidad, dias }) {
   );
 }
 
+/** Marca neutra "Contrato atípico"; al pasar el cursor muestra el primer motivo. */
+export function AtipicoTag({ motivos = [] }) {
+  return (
+    <span className="atipico-tag" title={motivos[0] ?? "Contrato fuera de lo común"}>
+      <Icon name="atipico" size={13} strokeWidth={2} />
+      Contrato atípico
+    </span>
+  );
+}
+
 /** Barra de avance. `marcador` dibuja una raya en el avance programado. */
 export function Progress({ value, marcador, color, alto = 4 }) {
   return (

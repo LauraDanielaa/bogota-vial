@@ -50,6 +50,9 @@ export function adaptarObra(r) {
     riesgo: r.riesgo_nivel || "Sin calcular",
     probRiesgo: num(r.riesgo_probabilidad),
     diasAdicionados: num(r.dias_adicionados),
+    // Contrato atípico (última ejecución del modelo ml/atipicos; false si aún no se ha ejecutado)
+    atipico: Boolean(r.contrato_atipico),
+    motivosAtipico: Array.isArray(r.atipico_motivos) ? r.atipico_motivos : [],
     lat: num(r.lat),
     lon: num(r.lon),
   };

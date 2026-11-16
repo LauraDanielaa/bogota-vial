@@ -3,6 +3,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from app.db import fetch_all, fetch_one
+from app.routers.atipicos import fuente_atipicos
 from app.routers.modelo import NOMBRE_MODELO, NOTA_RIESGO, UMBRALES, fuentes_riesgo
 
 router = APIRouter(prefix="/obras", tags=["obras"])
@@ -60,9 +61,14 @@ def obras_mapa():
     """Obras con coordenadas (v_obras_mapa) + tipo de contrato, estado de seguimiento
     y riesgo de atraso (modelo de prórroga; 'Sin calcular' si aún no se ha entrenado).
 
+    contrato_atipico / atipico_motivos: si el contrato de la obra quedó atípico en la última
+    ejecución del modelo de atípicos (todas las obras de ese contrato llevan la marca).
+    Sin ejecución, false y [].
+
     Son ~120 filas: el frontend las carga una vez y filtra en el navegador.
     """
     f = fuentes_riesgo()
+    atipicos = fuente_atipicos()
     return fetch_all(
         f"""
         SELECT m.objectid, m.nombre, m.etapa, m.contrato, m.estado_contrato,
@@ -74,11 +80,14 @@ def obras_mapa():
                s.codigo_sigidu, s.total_pagado, s.fecha_actualizacion, s.interventoria_contrato,
                coalesce(r.nivel, 'Sin calcular') AS riesgo_nivel,
                r.probabilidad                    AS riesgo_probabilidad,
-               c.dias_adicionados
+               c.dias_adicionados,
+               (a.id_contrato IS NOT NULL)        AS contrato_atipico,
+               coalesce(a.motivos, '[]'::jsonb)   AS atipico_motivos
         FROM v_obras_mapa m
         JOIN v_obras_seguimiento s USING (objectid)
         LEFT JOIN clean_secop c ON c.id_contrato = s.secop_id_contrato
         LEFT JOIN {f["riesgo_obra"]} r ON r.objectid = m.objectid AND r.version = {f["version"]}
+        LEFT JOIN {atipicos} a ON a.id_contrato = s.secop_id_contrato
         ORDER BY m.objectid
         """
     )

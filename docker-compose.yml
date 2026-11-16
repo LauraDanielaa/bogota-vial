@@ -5,6 +5,9 @@ name: bogota-vial
 #   docker compose run --rm etl          -> corre el ETL completo (carga los datos de ./data)
 #   docker compose run --rm etl --etapa calidad
 #   docker compose run --rm ml riesgo_prorroga   -> entrena el modelo (después del ETL)
+#   docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos
+#                                        -> contratos atípicos (una vez por commit; en el servidor
+#                                           lo corre el workflow en cada push a main)
 #
 # Las credenciales se leen de .env (ver .env.example).
 
@@ -50,11 +53,11 @@ services:
   ml:
     build: ./ml
     container_name: bogota_vial_ml
-    profiles: ["ml"]            # se ejecuta después del ETL con "docker compose run --rm ml riesgo_prorroga"
+    profiles: ["ml"]            # no arranca con "up"; se ejecuta después del ETL con "docker compose run --rm ml <modelo>"
     environment:
       <<: *db-env
     volumes:
-      - ./ml/models:/app/models # los modelos entrenados quedan en ml/models del repo
+      - ./ml/models:/app/models # el modelo de riesgo guarda aquí su .joblib (atípicos no guarda modelo)
     depends_on:
       db:
         condition: service_healthy

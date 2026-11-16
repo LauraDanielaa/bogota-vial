@@ -10,6 +10,11 @@
 # Los despliegues siguientes conservan el riesgo ya calculado. Para recalcularlo
 # (p. ej. con datos nuevos): Actions -> Verificar y desplegar -> Run workflow ->
 # marcar "Volver a calcular el riesgo de atraso".
+#
+# Contratos atípicos (modelo ml/atipicos): en cada push a main, después de verificar la API,
+# deploy/calcular-atipicos.sh corre el ETL y el modelo UNA vez por commit (el commit queda en
+# ml_atipicos_ejecucion; si ya existe una ejecución exitosa para él, no se repite). Si falla,
+# la web sigue con la ejecución anterior y el workflow muestra una advertencia. No corre en PR.
 
 name: Verificar y desplegar
 
@@ -52,8 +57,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Revisar sintaxis de backend, ETL y ML
-        run: python -m compileall -q backend/app etl ml
+      - name: Revisar sintaxis de backend y ETL
+        run: python -m compileall -q backend/app etl
+
+      - name: Revisar sintaxis de ML (riesgo de prórroga y contratos atípicos)
+        run: |
+          python -m compileall -q ml
+          bash -n deploy/calcular-riesgo.sh deploy/calcular-atipicos.sh
 
       - name: Validar docker compose de producción
         env:
@@ -105,3 +115,32 @@ jobs:
             # o si se pidió desde "Run workflow" (casilla recalcular_riesgo)
             bash deploy/calcular-riesgo.sh ${{ inputs.recalcular_riesgo && '--forzar' || '' }}
             docker image prune -f
+
+      # Contratos atípicos: ETL + modelo, una sola vez por commit (si el commit ya tiene una
+      # ejecución exitosa, no hace nada). Si falla, la web sigue con la ejecución anterior y
+      # el despliegue NO se cae (continue-on-error); el paso siguiente deja una advertencia.
+      - name: Contratos atípicos (ETL + modelo, una vez por commit)
+        id: atipicos
+        continue-on-error: true
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          command_timeout: 30m
+          script: |
+            set -e
+            cd /opt/bogota-vial
+            bash deploy/calcular-atipicos.sh ${{ github.sha }}
+            docker image prune -f
+
+      - name: Advertir si falló el modelo de contratos atípicos
+        if: steps.atipicos.outcome == 'failure'
+        run: |
+          echo "::warning title=Contratos atípicos::El modelo de contratos atípicos falló para el commit ${GITHUB_SHA::12}. La web sigue mostrando la ejecución anterior. Revisa el log del paso 'Contratos atípicos'."
+          {
+            echo "### ⚠️ Contratos atípicos: el modelo falló"
+            echo ""
+            echo "El despliegue terminó, pero el modelo no se ejecutó para el commit \`${GITHUB_SHA::12}\`."
+            echo "La web sigue mostrando la última ejecución exitosa."
+          } >> "$GITHUB_STEP_SUMMARY"

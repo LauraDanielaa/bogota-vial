@@ -13,6 +13,9 @@
 --   clasificar_riesgo(...)         reglas del nivel de riesgo de una obra
 --   v_prorroga_version_activa      versión del modelo que usa el backend
 --
+-- Modelo: contratos atípicos (ml/atipicos) -> sección al final del archivo
+--   ml_atipicos_ejecucion, ml_atipicos_contrato, v_atipicos_ejecucion_activa
+--
 -- Las tablas ml_* se crean solo si no existen: el ETL NO las borra, así que las
 -- predicciones se conservan al volver a correrlo. Tampoco tienen llaves foráneas
 -- a tablas que el ETL borra y recrea (clean_secop, obras_integradas).
@@ -179,4 +182,60 @@ SELECT version
 FROM ml_prorroga_metricas
 WHERE seleccionado
 ORDER BY entrenado_en DESC, version DESC
+LIMIT 1;
+
+
+-- =====================================================================
+-- Modelo: contratos atípicos (ml/atipicos)
+--   ml_atipicos_ejecucion          una fila por ejecución (commit de git, conteos, estabilidad,
+--                                  parámetros y validación)
+--   ml_atipicos_contrato           resultado de cada contrato en cada ejecución
+--   v_atipicos_ejecucion_activa    última ejecución exitosa (la que lee el backend)
+--
+-- Las llena:  docker compose run --rm -e COMMIT_GIT=$(git rev-parse HEAD) ml atipicos
+-- En producción corre sola, una vez por push a main (deploy/calcular-atipicos.sh).
+-- Igual que las demás tablas ml_*, se crean solo si no existen y el ETL no las borra.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS ml_atipicos_ejecucion (
+    id                   serial      PRIMARY KEY,
+    version              text        NOT NULL UNIQUE,     -- 'AAAAMMDD-HHMMSS'
+    ejecutado_en         timestamptz NOT NULL DEFAULT now(),
+    commit_git           text,                            -- commit que originó la ejecución
+    exitosa              boolean     NOT NULL DEFAULT true,
+    n_contratos          integer,                         -- población de referencia (913)
+    n_marcados_modelo    integer,                         -- aislados por IsolationForest
+    n_atipicos           integer,                         -- aislados y con al menos un motivo claro
+    n_atipicos_con_obra  integer,                         -- de ellos, con obra en el mapa
+    estabilidad          numeric,                         -- 0-1: proporción promedio que se mantiene con otras semillas
+    parametros           jsonb,
+    validacion           jsonb,                           -- por semilla, los diez más atípicos...
+    error                text                             -- solo en ejecuciones fallidas
+);
+
+-- Una sola ejecución exitosa por commit
+CREATE UNIQUE INDEX IF NOT EXISTS ml_atipicos_ejecucion_commit_exitosa
+    ON ml_atipicos_ejecucion (commit_git) WHERE exitosa AND commit_git IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS ml_atipicos_contrato (
+    ejecucion_id               integer NOT NULL REFERENCES ml_atipicos_ejecucion (id) ON DELETE CASCADE,
+    id_contrato                text    NOT NULL,
+    referencia                 text,              -- número del contrato (clean_secop.contrato)
+    tipo_de_contrato           text,
+    modalidad_de_contratacion  text,
+    valor_contrato             numeric,
+    plazo_dias                 integer,           -- plazo pactado; NULL si SECOP no lo trae
+    dias_adicionados           integer,
+    marcado_modelo             boolean NOT NULL,  -- aislado por IsolationForest
+    es_atipico                 boolean NOT NULL,  -- aislado Y con al menos un motivo claro
+    puntaje                    numeric NOT NULL,  -- más alto = más atípico (no se muestra en la web)
+    motivos                    jsonb   NOT NULL DEFAULT '[]',   -- [{"variable", "texto", ...}]
+    PRIMARY KEY (ejecucion_id, id_contrato)
+);
+
+CREATE OR REPLACE VIEW v_atipicos_ejecucion_activa AS
+SELECT *
+FROM ml_atipicos_ejecucion
+WHERE exitosa
+ORDER BY ejecutado_en DESC, id DESC
 LIMIT 1;

@@ -36,6 +36,8 @@ const PATHS = {
   bars: '<path d="M6 20v-4"/><path d="M12 20V10"/><path d="M18 20V4"/>',
   trendUp: '<path d="M7 17 17 7"/><path d="M7 7h10v10"/>',
   x: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  // Contrato atípico: punto con anillo punteado (el mismo dibujo del mapa)
+  atipico: '<circle cx="12" cy="12" r="9" stroke-dasharray="2.6 2.6"/><circle cx="12" cy="12" r="3.2"/>',
 };
 
 export default function Icon({ name, size = 16, strokeWidth = 1.8, className = "" }) {
